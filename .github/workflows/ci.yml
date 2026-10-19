@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }}, Go ${{ matrix.go }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            go: '1.25.x'
+            integration: false
+          - os: ubuntu-latest
+            go: '1.27.2'
+            integration: true
+          - os: macos-latest
+            go: '1.27.2'
+            integration: true
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: ${{ matrix.go }}
+          cache: true
+      - name: Format
+        shell: bash
+        run: test -z "$(gofmt -l .)"
+      - run: go vet ./...
+      - run: go test -race ./...
+      - run: go build ./cmd/gopls-mcp-proxy
+      - name: Install pinned gopls
+        if: matrix.integration
+        run: go install golang.org/x/tools/gopls@v0.24.0
+      - name: Same-session protobuf upgrades and content edits
+        if: matrix.integration
+        env:
+          GOPLS_INTEGRATION: '1'
+        run: go test -v ./integration -count=1
