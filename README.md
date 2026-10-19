@@ -4,6 +4,11 @@
 
 首版面向 **macOS / Linux、单工作区、单后端**。代理使用官方 MCP Go SDK，分别管理上下游会话。协议采用 `2025-11-25`，上游也接受更早的兼容版本；尚未开放 `2026-07-28` 的新会话语义。
 
+## 技术方案
+
+- [首版设计](docs/design.md)与[现有验证范围](docs/validation.md)：对应当前实现。
+- [Proxy 独立刷新与 MCP 协议兼容改造方案](docs/changes/proxy-refresh-protocol/README.md)：规划内容监测、通用消息透传、后端重建、协议恢复、分阶段任务和验收。状态为 Proposed，以下使用说明仍描述当前实现。
+
 ## 安装与使用
 
 可以从 [GitHub Releases](https://github.com/fredgnr/gopls-mcp-proxy/releases) 下载预编译包：

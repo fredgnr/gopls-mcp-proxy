@@ -1,5 +1,7 @@
 # gopls MCP 按工作区变化重建后端的技术方案
 
+> 文档归属：本文保留首版设计及其原始约束。后续改造见 [Proxy 独立刷新与 MCP 协议兼容方案](changes/proxy-refresh-protocol/README.md)。新方案计划替换“普通 Go 内容编辑由 gopls 刷新”“工具专用双会话转接”等设计；当前运行行为仍以仓库 README 和实际代码为准。
+
 本文描述拟实现的 `gopls-mcp-proxy`。代理保持与 Codex 的 MCP 连接，检测到依赖文件或 Go 文件结构变化后，重建内部 gopls 进程。本文为设计文档，所示代理命令行参数尚待实现。
 
 ```mermaid
