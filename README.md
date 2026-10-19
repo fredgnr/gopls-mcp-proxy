@@ -47,6 +47,10 @@ tool_timeout_sec = 120
 
 客户端超时应留出代理排队、扫描和恢复的时间。代理自己的版本仅用于诊断和打包，不会替换原生 `serverInfo` 或 `clientInfo`。
 
+### 默认启动入口提案
+
+让没有 `args` 的 Codex 配置只修改 `command`，由代理自动定位并启动 `gopls mcp`，见[默认 gopls 启动方案](docs/changes/default-gopls-launcher/README.md)。该方案状态为 **Proposed**；当前版本仍需按上述显式形式指定后端，新的默认入口与 Codex 验收尚未实施。
+
 ### 从旧命令迁移
 
 旧的 `--gopls`、`--workspace`、`--replace-dir` 已移除；使用它们会返回迁移提示。
