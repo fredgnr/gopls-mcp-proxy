@@ -6,6 +6,19 @@
 
 ## 安装与使用
 
+可以从 [GitHub Releases](https://github.com/fredgnr/gopls-mcp-proxy/releases) 下载预编译包：
+
+| 系统 | 架构 | 文件名后缀 |
+|---|---|---|
+| macOS，Apple Silicon | arm64 | `darwin_arm64.tar.gz` |
+| macOS，Intel | amd64 | `darwin_amd64.tar.gz` |
+| Linux，x86-64 | amd64 | `linux_amd64.tar.gz` |
+| Linux，ARM64 | arm64 | `linux_arm64.tar.gz` |
+
+解压后把 `gopls-mcp-proxy` 放到 `PATH` 目录，或在 MCP 配置中直接填写其绝对路径。每个包包含可执行文件、README 和记录版本、提交、目标平台及 Go 版本的 `BUILDINFO`。Release 同时提供 `checksums.txt`；下载所需平台的包后，用 `shasum -a 256 <文件名>`（macOS）或 `sha256sum <文件名>`（Linux）计算 SHA-256，与校验文件中的对应行核对。
+
+预编译包只包含代理；运行时仍需本机安装 Go 和支持 `gopls mcp` 的 gopls，并让 `go` 在 `PATH` 中。也可以从源码安装：
+
 构建代理需要 Go 1.25 或更新版本；还需要一个支持 `gopls mcp` 的 gopls。真实集成测试使用 **Go 1.27.2 + gopls v0.24.0**。gopls 自身的 Go 版本要求独立于代理。
 
 ```sh
@@ -105,7 +118,7 @@ GOPLS_INTEGRATION=1 GOPLS_BIN="$(command -v gopls)" \
 
 常规测试不下载 protobuf，使用隔离目录、受控后端和独立 MCP 子进程覆盖并发与异常场景。集成测试会联网下载 protobuf，验证 `v1.34.2 → v1.35.2 → v1.36.6` 的符号源码路径切换，并验证 gopls 自身监听到内容编辑且代理 generation 不变。
 
-CI 在 Linux/macOS 上执行 race 检查、vet、构建及真实 gopls 验收，另检查代理的最低 Go 版本。工作流使用只读权限和 `persist-credentials: false`。
+CI 在 Linux/macOS 上执行 race 检查、vet、构建及真实 gopls 验收，另检查代理的最低 Go 版本，并构建四种平台的二进制包。验证任务使用只读权限，所有 checkout 均设置 `persist-credentials: false`。
 
 实现结构：
 
@@ -115,7 +128,32 @@ CI 在 Linux/macOS 上执行 race 检查、vet、构建及真实 gopls 验收，
 | `internal/workspace` | 范围发现、指纹、文件监听 |
 | `internal/backend` | 下游 MCP、roots、进度映射、进程回收 |
 | `internal/proxy` | 串行监督、有界排队、代次一致性、上游 MCP |
+| `internal/buildinfo` | CLI 与上下游 MCP 共用的构建版本 |
 | `integration` | 真实代理与 gopls 验收 |
+| `scripts` | 交叉编译、打包与 GitHub Release 发布 |
+
+## 发布二进制
+
+推送 `vMAJOR.MINOR.PATCH` 格式的版本 tag 会触发 `Release` 工作流，例如：
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+工作流先运行完整 CI 和四平台构建，全部成功后才创建 GitHub Release，自动生成发布说明并上传四个 `.tar.gz` 包及 `checksums.txt`。`v0.2.0-rc.1` 等预发布 tag 会自动标为 prerelease；也接受 SemVer 的 `+BUILD` 后缀。版本号和提交 SHA 在构建时注入，`--version` 写入 stderr，上下游 MCP 握手使用同一个版本号。普通源码构建的版本为 `dev`。
+
+发布过程先创建 draft，上传完整附件后再公开；上传失败可重跑该次 Actions，继续完成 draft。已经公开的版本不会被覆盖，应使用新 tag 发布修订。发布前会确认远端 tag 仍指向本次验证的提交。
+
+普通分支 push、PR 和手动运行也会生成 `release-dist` Actions artifact，保留 14 天。分支构建版本为 `dev-<提交前12位>`；手动选择 tag 时使用 tag 版本。手动运行只构建和验证，不发布 Release。只有 tag push 的发布任务获得 `contents: write`，使用自动提供的 `GITHUB_TOKEN`，无需额外配置发布密钥。
+
+四个平台均通过 `CGO_ENABLED=0` 交叉编译，打包任务会运行构建宿主平台的 `--version` 和 `--help` 检查。Linux/macOS 的实际代理行为由 CI 的真实 gopls 测试验证；未单独执行四种架构的完整运行时回归。
+
+在 Linux 上复现打包（需要空的 `dist/`、Go、GNU tar、gzip 和 sha256sum）：
+
+```sh
+bash scripts/build-release.sh v0.1.0
+```
 
 原始设计见 [docs/design.md](docs/design.md)，验证范围见 [docs/validation.md](docs/validation.md)。
 

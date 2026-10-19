@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/fredgnr/gopls-mcp-proxy/internal/backend"
+	"github.com/fredgnr/gopls-mcp-proxy/internal/buildinfo"
 	"github.com/fredgnr/gopls-mcp-proxy/internal/proxy"
 	"github.com/fredgnr/gopls-mcp-proxy/internal/workspace"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -65,7 +66,7 @@ func run(ctx context.Context, args []string) error {
 		return fmt.Errorf("unexpected positional arguments: %v", flags.Args())
 	}
 	if *version {
-		fmt.Fprintln(os.Stderr, "gopls-mcp-proxy 0.1.0")
+		fmt.Fprintf(os.Stderr, "gopls-mcp-proxy %s (commit %s)\n", buildinfo.Version, buildinfo.Commit)
 		return nil
 	}
 	if err := cfg.Validate(); err != nil {

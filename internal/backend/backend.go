@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/fredgnr/gopls-mcp-proxy/internal/buildinfo"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -180,7 +181,7 @@ func start(ctx context.Context, cfg Config, roots []string) (Session, error) {
 	// Bound initialization even if a backend never answers the handshake.
 	stop := context.AfterFunc(ctx, p.close)
 	defer stop()
-	c := mcp.NewClient(&mcp.Implementation{Name: "gopls-mcp-proxy", Version: "0.1.0"}, &mcp.ClientOptions{
+	c := mcp.NewClient(&mcp.Implementation{Name: "gopls-mcp-proxy", Version: buildinfo.Version}, &mcp.ClientOptions{
 		Logger:         cfg.Logger,
 		Capabilities:   &mcp.ClientCapabilities{RootsV2: &mcp.RootCapabilities{}},
 		MultiRoundTrip: &mcp.MultiRoundTripOptions{Disabled: true},

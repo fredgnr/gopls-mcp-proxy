@@ -2,8 +2,10 @@ name: CI
 
 on:
   push:
+    branches: ['**']
   pull_request:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -13,6 +15,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  binaries:
+    name: Release packages
+    uses: ./.github/workflows/build.yml
+
   test:
     name: Test (${{ matrix.os }}, Go ${{ matrix.go }})
     runs-on: ${{ matrix.os }}

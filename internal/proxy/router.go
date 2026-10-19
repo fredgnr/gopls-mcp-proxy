@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/fredgnr/gopls-mcp-proxy/internal/buildinfo"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -171,7 +172,7 @@ func (s *Supervisor) fault(b *state, reason string) {
 }
 
 func (s *Supervisor) Server(tools []*mcp.Tool, instructions string) *mcp.Server {
-	server := mcp.NewServer(&mcp.Implementation{Name: "gopls-mcp-proxy", Version: "0.1.0"}, &mcp.ServerOptions{
+	server := mcp.NewServer(&mcp.Implementation{Name: "gopls-mcp-proxy", Version: buildinfo.Version}, &mcp.ServerOptions{
 		Instructions:              instructions,
 		Logger:                    s.cfg.Logger,
 		Capabilities:              &mcp.ServerCapabilities{Tools: &mcp.ToolCapabilities{}},
