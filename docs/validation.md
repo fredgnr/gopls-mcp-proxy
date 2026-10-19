@@ -1,41 +1,77 @@
-# 验证范围
+# 当前验证范围
 
-## 自动化场景
+本文说明新实现的测试位置和证据边界。首版“内容编辑由 gopls 自刷新、generation 不变”的断言已被替换；首版测试结果不能作为本次改造的验收结果。
 
-| 设计验收项 | 验证位置 |
+完整目标用例见[改造验收计划](changes/proxy-refresh-protocol/validation.md)。下面列出已编写的自动化覆盖，不把测试存在等同于最终提交通过，也不将单个组件子断言扩大为整个 VAL 完成。
+
+## 独立证明与真实互通
+
+`integration/raw_proxy_test.go` 的后端仅在启动时读取输入，后续请求返回启动快照。`TestRawFixtureNeverRefreshesItself` 先直接运行后端，证明同 PID 在文件变化后仍返回旧内容；再通过实际代理子进程验证内容变化触发新 PID/boot/generation，并保持前端连接。
+
+真实 gopls 使用独立 raw 客户端，不依赖生产 MCP SDK。`TestRealGoplsTwoProtobufUpgrades` 包含直连与代理 `tools/list` 对照、同代理会话 protobuf `v1.34.2 → v1.35.2 → v1.36.6` 的源码路径切换，以及内容编辑、新增、删除、原子替换触发代理 generation 增加。它验证实际互通，不替代无自刷新后端的因果证明。
+
+## 自动化覆盖位置
+
+| 范围 | 主要用例/文件 |
 |---|---|
-| 依赖内容变化、mtime 不变、新增空依赖文件 | `internal/workspace/tracker_test.go` |
-| Go 文件增删改名、原子保存、目录移动 | `internal/workspace/tracker_test.go` |
-| go.work 外部模块、显式 replace 目录、扫描边界 | `internal/workspace/tracker_test.go` |
-| 300 个生成文件的事件合并 | `TestAtomicSaveAndGeneratorBurst` |
-| 完全丢失监听事件后仍切换后端 | `TestMissingEventsTwoDependencyUpdatesSingleClient` |
-| fsnotify 与轮询分别检测变化 | `TestWatcherAndPollingEachDetectChanges` |
-| 长请求结果过期、不自动重放 | `TestOldResultDiscardedWithoutReplay` |
-| 启动期间再次变更、候选后端被丢弃 | `TestChangesDuringStartAreNeverPublished` |
-| 有界队列、取消释放、等待超时、重建中 ping | `TestQueueCancellationLimitsAndPingDuringRebuild` |
-| 崩溃恢复、无效 go.mod 修复、schema 变化拒绝 | `TestCrashLoadingFailureAndSchemaDrift` |
-| 执行总期限、排空期限 | `TestExecutionTimeoutAndBoundedDrain` |
-| 真实 MCP 子进程的 roots、进度映射、完整结果 | `internal/backend/backend_test.go` |
-| 下游取消通知、进程崩溃、初始化无响应、Wait 回收 | `internal/backend/backend_test.go` |
-| 同一代理进程/同一 MCP 会话两次 protobuf 升级 | `integration/real_gopls_test.go` |
-| 普通内容编辑由 gopls 更新、generation 不变 | `integration/real_gopls_test.go` |
+| 原始 argv、cwd/env、PATH、分隔符及旧参数迁移 | `cmd/gopls-mcp-proxy/main_test.go`、`TestRawArgumentsEnvironmentAndWorkingDirectory`、`TestRawProxyArgvAndEnvironment` |
+| raw JSON、typed ID、数字精度、扩展字段、null、短读短写、大帧与 batch | `internal/wire/wire_test.go`、`TestRawProxyPayloadIdentity`、`TestRawProxyLegacyBatch` |
+| 常规输入内容、同长度同 mtime 修改、范围/glob/符号链接 | `internal/workspace/content_test.go`、`tracker_test.go` |
+| 写入后恢复原值、事件 epoch、事件丢失、扫描竞态/取消/读取错误 | workspace 内容测试、`TestRawProxyIdlePollRefresh`、`TestRawProxyWatcherSameContentInvalidates` |
+| 五修订基本重复刷新与连接保持 | `TestRawProxyRefreshEachRevision` |
+| 双向 roots、内部初始化隔离、legacy 日志与资源订阅恢复 | `TestRawProxyReverseRootsAcrossRefresh`、`TestRawProxyConfirmedLegacyStateRecovery`、`internal/proxy/recovery_test.go` |
+| 目录分页、重复 cursor、不完整目录、未知初始化扩展、约定变化 | `internal/proxy/recovery_test.go`、`TestRawProxyUnknownInitializeRequiresReconnect` |
+| 现代 metadata、合法 ID 复用、取消后复用 | `TestRawProxyModernMetadataAndIDReuse`、`TestRawProxyModernCancelAndReuseID` |
+| 现代 MRTR 与订阅跨刷新行为 | `TestRawProxyModernMRTRAcrossRefresh`、`TestRawProxyModernSubscriptionRefresh` |
+| 已派发业务不重放、写工具副作用报告、未派发取消 | `TestRawProxyNeverReplaysDispatchedBusiness`、`TestRawProxyWriteToolReportsSideEffects`、`TestRawProxyCancelQueuedRequest` |
+| TERM 忽略、阻塞管道、Wait、后代进程组、禁止重叠启动 | `internal/backend/backend_test.go`、`process_test.go` |
+| 二进制符号链接升级与每次启动摘要 | `TestExecutableLocatorAcceptsSymlinkUpgrade` |
+| 100 次连续刷新 | `TestRawProxyHundredRefreshes` |
+| 流式内容扫描成本 | `BenchmarkContentScan` |
 
-真实集成测试使用 `go get` 进行依赖升级，并检查 `go_file_context` 返回的声明路径包含对应 `protobuf@版本/`。这同时验证双 MCP 会话、重建、指纹核对和结果转发，而不只检查进程是否重新启动。
+测试使用受控临时目录、原始客户端与原始后端。race 构建的 raw 集成测试也用 race 构建代理程序。真实 gopls 测试才需要额外安装 gopls 和下载 protobuf；核心 raw 用例不因缺少 gopls 而跳过。
 
-## 首次实现的本地结果
+## 协议证据应分开记录
 
-2026-10-19，在 Linux 环境使用 Go 1.26.1 构建代理、gopls v0.24.0（由自动下载的 Go 1.27.2 构建）：
+| 修订 | 转发/组件覆盖 | 刷新与恢复覆盖 | 尚不能据此宣称 |
+|---|---|---|---|
+| `2024-11-05` | profile、原始中继与初始化 | 基本内容刷新；legacy 恢复组件 | 任意客户端/扩展状态都能隐藏恢复 |
+| `2025-03-26` | 上述内容及 batch 成员转发 | 基本内容刷新；legacy 恢复组件 | 所有 batch × 取消 × 部分写入组合均通过 |
+| `2025-06-18` | profile、原始中继与初始化 | 基本内容刷新；legacy 恢复组件 | 未覆盖能力组合的全面认证 |
+| `2025-11-25` | legacy raw 互通与真实 gopls 目标 | 内容刷新、日志/订阅/目录恢复用例 | 单次真实 gopls 通过等于所有 legacy 后端通过 |
+| `2026-07-28` | 逐请求 metadata、MRTR、订阅、ID/取消 fixture | 基本刷新、MRTR continuation、旧订阅结束 | 真实 gopls 支持现代协议，或未知状态无损迁移 |
 
-- `go test -race ./...`：通过；真实集成测试在此命令中按设计跳过。
-- `go vet ./...`：通过。
-- `GOPLS_INTEGRATION=1 GOPLS_BIN=... go test -v ./integration -count=1`：通过。
-- 在同一个 MCP 连接和同一个代理 PID 中，依次观察到 protobuf v1.34.2、v1.35.2、v1.36.6 的源码路径。
+未知修订和未知初始化扩展的正常转发，与刷新时显式重连分别验证。任意 task、业务 handle、opaque continuation 的跨进程持久性不在保证范围内。
 
-macOS 和最低 Go 版本由仓库 CI 执行，其状态以对应提交的 Actions 结果为准。Windows 尚未做正式验收；Unix 平台使用独立进程组清理 gopls 及其后代，其他平台只提供直接子进程清理。
+## 执行与 CI
 
-## 边界
+```sh
+# 默认包含 raw helper 的核心回归。
+go test -race ./...
+go vet ./...
+go build ./cmd/gopls-mcp-proxy
 
-- 不承诺文件系统事务快照；一致性边界是请求派发前和返回前的校验。
-- 任意目录规模下的吞吐量未做基准测试。请求前后全量路径遍历可能增加大仓库延迟。
-- 连续写入跨越安静窗口可形成多次有效重建；生成器单个事件批次的合并由受控测试验证。
-- 目录符号链接不隐式扩展扫描范围；外部本地依赖需通过 go.work 或 `--replace-dir` 纳入。
+# 单独执行独立刷新与协议用例。
+go test -race -v ./integration -run '^TestRaw' -count=1
+
+# 真实互通；需要支持 MCP 的 gopls，并允许下载测试依赖。
+GOPLS_INTEGRATION=1 GOPLS_BIN="$(command -v gopls)" \
+  go test -v ./integration -run '^TestRealGopls' -count=1
+
+# 内容扫描基准，不包括真实后端启动成本。
+go test ./internal/workspace -run '^$' -bench BenchmarkContentScan -benchmem
+```
+
+CI 保留 Linux/macOS、最低 Go 1.25、Go 1.27.2、固定 gopls v0.24.0、race/vet/build 和四平台打包。组件测试、raw 合同测试、真实互通分为独立步骤；Linux 最低版本也必须执行 raw 用例。测试将 `PROXY_TEST_EVIDENCE_DIR` 放在 runner 临时目录，保留 fixture 的 boot/receipt/execution/raw 消息事件及代理 stderr，不把证据写入被监测根。JSON 结果和这些轨迹一起作为 `test-results-<os>-go-<version>` artifact 保留 14 天，构建包作为 `release-dist` 保留 14 天。
+
+CI 使用 `contents: read`，checkout 为 `persist-credentials: false`，不使用 `pull_request_target`。本次验证配置不增加 tag、Release 或发布权限。
+
+本次开发的最终提交、命令结果和远端 Actions 链接由[实施记录](changes/proxy-refresh-protocol/implementation-plan.md)及同目录验收记录统一登记。本文不预先宣布尚未运行的最终 Linux/macOS 矩阵通过。
+
+## 明确限制
+
+- 内容扫描基准不能替代完整中继吞吐量、刷新延迟分位数和长期资源收敛测量。100 轮功能测试也不是完整性能验收。
+- 目前的用例集合不等于完整 VAL 矩阵；所有版本下的反向交互、背压、部分写入、损坏帧、分页变化及取消竞态仍需逐项核对实际覆盖。
+- Linux 本地结果不能替代 macOS Actions，也不能替代最终提交的测试。四架构交叉构建不是四架构运行验收。
+- Unix 进程组清理覆盖受管理后代；自行脱离进程组的外部守护程序不在此进程树管理保证内。Windows 未列为运行支持平台。
+- 不提供文件系统事务或副作用回滚；未知业务状态、完全未观察到的短暂文件变化不承诺恢复或检测。

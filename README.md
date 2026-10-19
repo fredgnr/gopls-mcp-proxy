@@ -1,108 +1,147 @@
 # gopls-mcp-proxy
 
-为 `gopls mcp` 提供稳定的 MCP stdio 连接。工作区的依赖或 Go 文件集合变化后，代理会关闭旧 gopls、重新初始化新后端，Codex 无需断开连接。
+给 MCP stdio 后端增加由代理负责的输入刷新。代理监测工作目录中的文件内容，输入变化后回收旧进程、启动新进程，并在协议状态可以安全恢复时保持客户端连接。
 
-首版面向 **macOS / Linux、单工作区、单后端**。代理使用官方 MCP Go SDK，分别管理上下游会话。协议采用 `2025-11-25`，上游也接受更早的兼容版本；尚未开放 `2026-07-28` 的新会话语义。
+默认用法是包装 `gopls mcp`，也可以包装其他 MCP stdio 程序。代理不维护 gopls 工具清单，不调用 reload 工具，不依赖 gopls 自己发现文件变化。方法名、工具参数、schema、结果和上游错误通过原始 JSON 转发；只有协议关联字段在需要隔离请求时改写。
 
-## 安装与使用
+本轮范围是 **macOS / Linux、stdio、一个客户端、一个活跃后端**。监测多个目录不会启动多个后端。协议转发与跨进程恢复的范围分别说明在下文；当前提交的运行证据见[验证说明](docs/validation.md)，完整目标与验收编号见[改造方案](docs/changes/proxy-refresh-protocol/README.md)。
 
-可以从 [GitHub Releases](https://github.com/fredgnr/gopls-mcp-proxy/releases) 下载预编译包：
+## 安装与运行
 
-| 系统 | 架构 | 文件名后缀 |
-|---|---|---|
-| macOS，Apple Silicon | arm64 | `darwin_arm64.tar.gz` |
-| macOS，Intel | amd64 | `darwin_amd64.tar.gz` |
-| Linux，x86-64 | amd64 | `linux_amd64.tar.gz` |
-| Linux，ARM64 | arm64 | `linux_arm64.tar.gz` |
-
-解压后把 `gopls-mcp-proxy` 放到 `PATH` 目录，或在 MCP 配置中直接填写其绝对路径。每个包包含可执行文件、README 和记录版本、提交、目标平台及 Go 版本的 `BUILDINFO`。Release 同时提供 `checksums.txt`；下载所需平台的包后，用 `shasum -a 256 <文件名>`（macOS）或 `sha256sum <文件名>`（Linux）计算 SHA-256，与校验文件中的对应行核对。
-
-预编译包只包含代理；运行时仍需本机安装 Go 和支持 `gopls mcp` 的 gopls，并让 `go` 在 `PATH` 中。也可以从源码安装：
-
-构建代理需要 Go 1.25 或更新版本；还需要一个支持 `gopls mcp` 的 gopls。真实集成测试使用 **Go 1.27.2 + gopls v0.24.0**。gopls 自身的 Go 版本要求独立于代理。
+代理源码要求 Go 1.25 或更新版本。代理自身不执行 `go env`，包装非 Go 后端时也不要求安装 Go；运行 gopls 时仍需满足 gopls 自身的运行要求。以下新 CLI 对应此源码版本；此前已发布包请参照其随包 README，不能假定旧 tag 包含本次改造。
 
 ```sh
-go install github.com/fredgnr/gopls-mcp-proxy/cmd/gopls-mcp-proxy@latest
-go install golang.org/x/tools/gopls@v0.24.0
+go install github.com/fredgnr/gopls-mcp-proxy/cmd/gopls-mcp-proxy@main
 
-gopls-mcp-proxy --gopls /absolute/path/to/gopls --workspace /absolute/path/to/project
+cd /absolute/path/to/project
+gopls-mcp-proxy -- /absolute/path/to/gopls mcp
 ```
 
-程序启动后等待 stdin 上的 MCP 消息，**stdout 不输出日志**。帮助、版本信息、代理日志和 gopls 日志均写入 stderr。退出客户端或发送 SIGINT/SIGTERM 会清理后端。
+命令边界固定为：
 
-Codex 配置示例（将路径换成自己的绝对路径）：
+```text
+gopls-mcp-proxy [代理选项] -- 程序 [原始参数...]
+```
+
+`--` 后必须提供程序。其后的空参数、空格、中文、引号、`--help`、`--version` 和 shell 字符都按原始 argv 传入，不再由代理解析，也不拼接为 shell 命令。程序需要提供 MCP stdio；普通文本 stdout 子命令不属于协议代理的支持范围。
+
+工作目录和环境由调用方设置。`--watch-root` 只增加输入监测范围，不切换 cwd，也不替客户端声明 MCP roots。程序路径通过启动时的 PATH 或显式路径解析，并固定为绝对定位路径；环境和参数在一次代理运行期间保持不变。下一次受控启动会读取该路径的新映像，允许符号链接目标或二进制被升级；代理不会单独监听二进制升级事件。
+
+帮助、版本、代理日志和后端 stderr 均写入 stderr；stdout 只输出 MCP 帧。客户端 EOF、SIGINT 和 SIGTERM 会触发后端清理。
+
+Codex 配置示例：
 
 ```toml
 [mcp_servers.gopls]
 command = "/Users/you/go/bin/gopls-mcp-proxy"
 args = [
-  "--gopls", "/Users/you/go/bin/gopls",
-  "--workspace", "/Users/you/projects/my-project",
+  "--watch-root", "/Users/you/projects/shared",
   "--debounce", "500ms",
-  "--poll-interval", "2s",
-  "--request-timeout", "110s"
+  "--request-timeout", "110s",
+  "--", "/Users/you/go/bin/gopls", "mcp"
 ]
 cwd = "/Users/you/projects/my-project"
 startup_timeout_sec = 60
 tool_timeout_sec = 120
 ```
 
-代理继承 `PATH`、`GOROOT`、`GOPROXY` 等环境。内部请求期限应小于客户端的工具超时。MCP 初始化成功前，代理先等待首个后端就绪。
+客户端超时应留出代理排队、扫描和恢复的时间。代理自己的版本仅用于诊断和打包，不会替换原生 `serverInfo` 或 `clientInfo`。
 
-## 哪些变化会重建
+### 从旧命令迁移
 
-| 工作区变化 | 行为 |
-|---|---|
-| `go.mod`、`go.sum`、`go.work`、`go.work.sum` 内容变化、新增或删除 | 重建 |
-| `.go` 文件新增、删除、重命名或所在目录移动 | 重建 |
-| 已有 `.go` 文件仅编辑内容 | 不重建，由 gopls 文件监听更新分析 |
-| 只有时间戳变化 | 不重建 |
-| 原子保存后最终 `.go` 路径集合不变 | 安静窗口内合并事件，不重建 |
-| 批量生成 Go 文件 | 文件稳定后重建 |
-
-扫描覆盖配置目录、包含它的模块、当前生效的 `go.work` 中的 `use` 模块，以及通过 `--replace-dir` 明确添加的本地目录。`--replace-dir` 可重复，且相对路径以 workspace 为基准：
+旧的 `--gopls`、`--workspace`、`--replace-dir` 已移除；使用它们会返回迁移提示。
 
 ```sh
-gopls-mcp-proxy --workspace /src/app --replace-dir ../shared --replace-dir ../api
+# 旧命令
+gopls-mcp-proxy --workspace /src/app --gopls /opt/bin/gopls --replace-dir ../shared
+
+# 新命令
+cd /src/app
+gopls-mcp-proxy --watch-root ../shared -- /opt/bin/gopls mcp
 ```
 
-外部 `replace` 目录**不会自动递归展开**，需要显式添加。自动发现 `go.work` 时，每次扫描都会重新检查祖先目录；支持 `GOWORK=off`、显式绝对路径以及 `go env -w` 持久化设置。祖先目录只检查依赖文件，不做无界递归扫描。
+MCP 配置中将旧 `--workspace` 移到客户端的 `cwd` 配置，将额外目录改为 `--watch-root`，并显式写出后端程序及 `mcp` 参数。
 
-扫描排除 `.git`、`.hg`、`.svn`、`node_modules`、当前 `GOMODCACHE` 和 `GOROOT`，拒绝把文件系统根目录或用户主目录作为扫描根。目录符号链接不递归跟随；显式目录参数会解析符号链接。大工作区每次请求都要扫描，延迟取决于文件数量。
+## 输入监测与刷新
 
-## 一致性与失败行为
+默认扫描 cwd 和重复指定的 `--watch-root`，对所有纳入范围的常规文件计算完整内容 SHA-256，包括已有 `.go`、隐藏文件、vendor、嵌入资源和 C/C++ 输入。默认排除 `.git`、`.hg`、`.svn` 内部目录；`node_modules` 和生成目录不会自动排除，需要按实际输入范围配置。
 
-- fsnotify 事件先暂停派发，默认等待 500ms 安静窗口，再校验 SHA-256 指纹。每 2 秒轮询兜底，每次派发前和返回前也做完整校验。
-- 指纹包含依赖文件路径、存在状态、完整内容，以及排序后的 Go 文件路径；不会以 mtime 代替内容校验，也不会对普通 Go 文件计算内容哈希。
-- 只有一个 supervisor 可以发布后端。重建先排空已有调用，再关闭旧进程；启动前后状态不一致的新进程会被丢弃。
-- 排队、扫描和执行共享一个请求总期限。队列有上限，支持取消；已发送的工具调用不自动重放。
-- 旧代次的结果会返回 `PROXY_STALE_RESULT`。依赖解析错误会保留文件路径和具体错误；修复文件后自动重试。
-- gopls 崩溃或请求超时后会重建；启动失败使用有上限的指数退避。不会恢复使用已经失效的旧后端。
-- 工具定义（含 schema、annotations）及结果的 `content`、`structuredContent`、`isError`、`_meta` 保留。进度 token 在下游会话内重新分配，取消由 SDK 传播。
-- 工具清单固定在首个成功后端；重建后定义发生变化会要求重启代理会话。gopls 可执行文件内容变化也会被拒绝，需重启代理。
-- `ping` 由代理本地处理，重建时仍可响应。仅声明 tools 能力，不代理 resources、prompts、sampling 或 elicitation。
+```sh
+cd /src/app
+gopls-mcp-proxy \
+  --watch-root ../shared \
+  --exclude 'node_modules/**' \
+  --exclude 'build/**' \
+  -- /opt/bin/gopls mcp
+```
 
-保证以派发前和返回前的校验时刻为界，不提供文件系统事务快照。`go get` 分阶段改写依赖文件、两次写入间隔超过安静窗口时，可能出现多次有效重建。
+`--include` 和 `--exclude` 可重复，采用相对各监测根的斜杠路径。`*`、`?`、`[]` 匹配单段，独立的 `**` 匹配零段或多段；没有 `/` 的模式匹配任意深度的名称。排除优先，不支持 `!` 取反、反斜杠或绝对 glob。将文件排除意味着代理不再保证它的变化触发刷新。
 
-## 参数
+| 变化 | 行为 |
+|---|---|
+| 已有 Go 文件或其他输入内容改变 | 重建 |
+| 文件新增、删除、重命名、目录移动 | 重建 |
+| 同长度修改并恢复原 mtime | 仍能通过内容校验发现 |
+| 原子替换，或已观察到写入后内容恢复原值 | 保守重建，事件失效 epoch 不回退 |
+| 仅时间戳改变，内容和范围不变 | 不单独要求重建 |
+| 所有监听事件丢失，但最终内容改变 | 周期扫描与请求前后扫描兜底 |
+
+目录内部符号链接只纳入链接目标文本，不递归跟随；需要监测外部目标时显式添加 `--watch-root`。显式监测根可以是文件或目录，根本身为符号链接时每次扫描重新解析并记录目标变化。拒绝把整个文件系统根或用户主目录作为扫描根。
+
+`--go-discovery` 可选启用 Go 工作区范围发现，读取祖先依赖文件和有效 `go.work` 的 `use` 目录；默认通用模式不解析 Go 语法。该选项读取当前进程的 `GOWORK`（`off` 或绝对路径），不执行 `go env`、不读取 `go env -w` 持久化设置，也不修改后端环境。外部本地 replace 目录应显式加入 `--watch-root`。发现解析失败时保留显式范围和最后成功的发现范围，并继续监测原始文件内容。
+
+## 协议与恢复范围
+
+原始消息通道保留未知字段、缺失与 null 的区别、数字精度、原生工具描述及错误。请求 ID 区分字符串和数字；反向请求、进度、取消和内部恢复请求按物理后端连接隔离。`ping` 转发给后端；代理不新增工具，也不伪装后端健康。
+
+一个 batch 作为整体接收和派发，不拆成多个执行批次。其请求成员数不得超过 `--max-concurrent`，并且必须同时满足队列数量、字节与帧预算；超限会在写入后端前拒绝。混有通知的 batch 无法为所有成员提供请求错误，因此预算拒绝会结束连接。
+
+| 协议配置 | 稳定连接内 | 替换进程时 |
+|---|---|---|
+| `2024-11-05`、`2025-03-26`、`2025-06-18`、`2025-11-25` | 原生初始化、普通请求、通知、反向请求；batch 仅在 `2025-03-26` 启用 | 重建确认成功的标准初始化、日志级别及资源订阅；初始化约定和目录必须满足恢复检查 |
+| `2026-07-28` | 保留每次请求的版本、能力、身份 metadata；转发 MRTR 和长期订阅 | 不强制 initialize/discover；长期订阅按协议结束，由客户端重新建立；不自动发起 MRTR 下一轮 |
+| 未知修订或未知初始化状态扩展 | 合法原始消息可转发，仍受 framing 和资源预算限制 | 没有明确恢复规则时关闭连接并要求重连 |
+
+表中描述已实现的 profile 和恢复策略，不代表任意客户端、任意后端或全部验收组合均通过。五修订 fixture 与真实 gopls 是两类独立证据；现代 fixture 通过不表示真实 gopls 支持现代协议。
+
+初次连接直接转发真实客户端握手，不强制 `tools/list` 预热。刷新时比较版本、能力、身份、instructions 等初始化信息；已观察目录若支持合法变更通知，则发送失效通知，否则需要完整、可比较且相同的分页快照。目录不完整、未知扩展、恢复失败或约定变化会返回 `protocol_restart_required` 并结束 stdio，客户端需重新建立连接。不会继续使用已知陈旧后端。
+
+分页 cursor、task ID、业务 handle 和 MRTR `requestState` 原样传递，但不保证跨进程有效。代理不重放创建这些状态的业务调用，也不把旧版反向请求翻译为现代 MRTR。
+
+## 一致性与错误
+
+文件事件、内容指纹和独立 dirty epoch 控制后端发布。每次派发和交付有限请求结果前进行内容检查，启动候选前后也复核输入；启动期间变化的候选不能成为新代次。刷新暂停新普通请求，已派发操作需要的反向回复、取消等控制消息继续有界转发。
+
+已进入写入阶段的业务请求一律不自动重放，包括部分写入、崩溃、超时和旧代次结果。代理错误是 JSON-RPC 错误（应用 code `1000`），不是伪造的工具 `isError` 结果。错误 `data` 含 `reason`、`generation`、`requestDispatched`、`backendResponseReceived`、`sideEffects` 和 `automaticReplay: false`。上游错误保持原样。
+
+这尤其影响写工具：工具可能已经修改文件，但结果因跨越刷新边界而被拒绝。`requestDispatched: true` 表示副作用不确定，使用方需要核对实际状态再决定下一步，不能把错误当作未执行证明。
+
+保证以扫描检查点为界，不提供文件系统事务快照。完全发生在两次观察之间、且所有事件都丢失的短暂变化无法被证明发现。内容扫描和进程重建有实际成本；大目录可通过明确的输入范围控制开销。
+
+## 预算与选项
 
 | 参数 | 默认值 | 含义 |
 |---|---|---|
-| `--gopls` | `gopls` | 后端可执行文件 |
-| `--workspace` | `.` | 工作区目录 |
-| `--replace-dir` | 无 | 额外本地依赖目录，可重复 |
-| `--debounce` | `500ms` | 事件安静窗口 |
-| `--poll-interval` | `2s` | 全量轮询周期 |
-| `--drain-timeout` | `5s` | 等待正在执行的请求结束的上限 |
-| `--startup-timeout` | `45s` | 后端初始化期限；也用于首个后端的总体等待 |
-| `--shutdown-timeout` | `2s` | 关闭 stdin 后及 SIGTERM 后各自的等待时间 |
-| `--request-timeout` | `110s` | 每次工具调用的总期限 |
-| `--queue-limit` | `64` | 最多待派发请求数 |
-| `--max-concurrent` | `8` | 最多并行执行请求数 |
-| `--retry-min` / `--retry-max` | `1s` / `30s` | 启动失败退避范围 |
-| `--version` | — | 输出版本并退出 |
+| `--watch-root` | 无 | 额外输入文件或目录，可重复；cwd 始终纳入 |
+| `--include` / `--exclude` | 无 | 输入 glob，可重复 |
+| `--go-discovery` | `false` | 可选 Go 工作区发现 |
+| `--disable-watcher` | `false` | 只用轮询和请求检查，便于验证漏事件路径 |
+| `--debounce` / `--max-debounce` | `500ms` / `2s` | 安静窗口和本轮最大合并等待 |
+| `--poll-interval` | `2s` | 周期全量内容检查 |
+| `--drain-timeout` | `5s` | 等待已派发有限请求结束的上限 |
+| `--startup-timeout` | `45s` | 单次启动及协议恢复上限 |
+| `--shutdown-timeout` | `2s` | 关闭 stdin 后、TERM 后各自等待上限 |
+| `--refresh-timeout` | `60s` | 从首个确认失效开始的一轮恢复预算 |
+| `--cleanup-timeout` | `6s` | 最后资源清理预算 |
+| `--request-timeout` | `110s` | 有限请求排队、扫描、执行的总期限 |
+| `--queue-limit` | `64` | 待派发请求数，batch 按请求成员计数 |
+| `--queue-bytes` | `67108864` | 字节预算，64 MiB |
+| `--max-frame-bytes` | `16777216` | 单帧上限，16 MiB |
+| `--max-concurrent` | `8` | 普通有限请求并发上限 |
+| `--retry-min` / `--retry-max` | `1s` / `30s` | 有上限的恢复退避 |
+| `--help` / `--version` | — | 输出代理帮助或版本后退出 |
 
-常见错误：`PROXY_QUEUE_FULL`（队列满）、`PROXY_WAIT_TIMEOUT`（等待超时）、`PROXY_EXECUTION_TIMEOUT`（执行或排空期限已到）、`PROXY_WORKSPACE_ERROR`（扫描或依赖解析失败）、`PROXY_BACKEND_UNAVAILABLE`（后端不可用）、`PROXY_STALE_RESULT`（旧结果已丢弃）、`PROXY_SESSION_RESTART_REQUIRED`（工具定义变化）。这些代理错误使用 MCP `isError: true`，下游协议错误仍作为协议错误返回。
+确认建立的现代长期订阅不使用普通请求期限，也不阻塞 drain。通知不能返回请求错误；无法在预算内转发时结束连接，不静默丢弃。清理按关闭 stdin、TERM、KILL、Wait 执行，覆盖 Unix 进程组；未确认完成清理时不启动下一后端。默认故障收敛上限是正常恢复 60s 加最后清理最多 6s，不是保证 60s 内一定恢复服务。
 
 ## 开发与验证
 
@@ -111,50 +150,28 @@ go test -race ./...
 go vet ./...
 go build ./cmd/gopls-mcp-proxy
 
-# 实际启动代理和 gopls，在同一个 MCP 会话中运行两次 go get 升级。
+# 必跑独立后端：不需要 gopls，也不依赖后端自行刷新。
+go test -race -v ./integration -run '^TestRaw' -count=1
+
+# 真实 gopls 互通：联网下载测试依赖。
 GOPLS_INTEGRATION=1 GOPLS_BIN="$(command -v gopls)" \
-  go test -v ./integration -count=1
+  go test -v ./integration -run '^TestRealGopls' -count=1
 ```
 
-常规测试不下载 protobuf，使用隔离目录、受控后端和独立 MCP 子进程覆盖并发与异常场景。集成测试会联网下载 protobuf，验证 `v1.34.2 → v1.35.2 → v1.36.6` 的符号源码路径切换，并验证 gopls 自身监听到内容编辑且代理 generation 不变。
+独立后端只在启动时读取一次输入，用同 PID 的负向对照证明它不会自行刷新，再验证相同代理进程/前端连接内的后端换代。真实 gopls 测试执行 protobuf `v1.34.2 → v1.35.2 → v1.36.6`，并要求内容编辑也由代理重建。
 
-CI 在 Linux/macOS 上执行 race 检查、vet、构建及真实 gopls 验收，另检查代理的最低 Go 版本，并构建四种平台的二进制包。验证任务使用只读权限，所有 checkout 均设置 `persist-credentials: false`。
+CI 分别执行组件 race 测试、必跑 raw 协议/刷新测试、真实 gopls 互通和二进制构建，保存 JSON 测试日志。Linux/macOS 及最低 Go 版本矩阵以当前提交的 Actions 结果为准；设计用例尚未覆盖的组合不会因某个组件测试通过就被记为通过。详见[验证范围](docs/validation.md)和[实现设计](docs/design.md)。
 
-实现结构：
+## 二进制与发布
 
-| 路径 | 职责 |
-|---|---|
-| `cmd/gopls-mcp-proxy` | 参数、Go 环境、信号和 stdio 入口 |
-| `internal/workspace` | 范围发现、指纹、文件监听 |
-| `internal/backend` | 下游 MCP、roots、进度映射、进程回收 |
-| `internal/proxy` | 串行监督、有界排队、代次一致性、上游 MCP |
-| `internal/buildinfo` | CLI 与上下游 MCP 共用的构建版本 |
-| `integration` | 真实代理与 gopls 验收 |
-| `scripts` | 交叉编译、打包与 GitHub Release 发布 |
+[GitHub Releases](https://github.com/fredgnr/gopls-mcp-proxy/releases) 的构建目标为 `darwin_arm64`、`darwin_amd64`、`linux_amd64`、`linux_arm64`。每个包包含代理、README 和 `BUILDINFO`，同时提供 `checksums.txt`。macOS 可用 `shasum -a 256`、Linux 可用 `sha256sum` 核对下载包。包内不包含 gopls。
 
-## 发布二进制
+版本 tag 的发布流程先完成 CI 和四目标构建，再创建 draft、上传附件并公开；已公开版本不覆盖。普通分支和 PR 只生成保留 14 天的 `release-dist` artifact。验证和构建使用只读权限，checkout 保持 `persist-credentials: false`；只有现有 tag 发布任务具有发布权限。本次改造不自动创建 tag 或 Release。
 
-推送 `vMAJOR.MINOR.PATCH` 格式的版本 tag 会触发 `Release` 工作流，例如：
+在 Linux 本地验证打包（需要空 `dist/`、Go、GNU tar、gzip、sha256sum）：
 
 ```sh
-git tag v0.1.0
-git push origin v0.1.0
+bash scripts/build-release.sh dev-$(git rev-parse --short=12 HEAD)
 ```
 
-工作流先运行完整 CI 和四平台构建，全部成功后才创建 GitHub Release，自动生成发布说明并上传四个 `.tar.gz` 包及 `checksums.txt`。`v0.2.0-rc.1` 等预发布 tag 会自动标为 prerelease；也接受 SemVer 的 `+BUILD` 后缀。版本号和提交 SHA 在构建时注入，`--version` 写入 stderr，上下游 MCP 握手使用同一个版本号。普通源码构建的版本为 `dev`。
-
-发布过程先创建 draft，上传完整附件后再公开；上传失败可重跑该次 Actions，继续完成 draft。已经公开的版本不会被覆盖，应使用新 tag 发布修订。发布前会确认远端 tag 仍指向本次验证的提交。
-
-普通分支 push、PR 和手动运行也会生成 `release-dist` Actions artifact，保留 14 天。分支构建版本为 `dev-<提交前12位>`；手动选择 tag 时使用 tag 版本。手动运行只构建和验证，不发布 Release。只有 tag push 的发布任务获得 `contents: write`，使用自动提供的 `GITHUB_TOKEN`，无需额外配置发布密钥。
-
-四个平台均通过 `CGO_ENABLED=0` 交叉编译，打包任务会运行构建宿主平台的 `--version` 和 `--help` 检查。Linux/macOS 的实际代理行为由 CI 的真实 gopls 测试验证；未单独执行四种架构的完整运行时回归。
-
-在 Linux 上复现打包（需要空的 `dist/`、Go、GNU tar、gzip 和 sha256sum）：
-
-```sh
-bash scripts/build-release.sh v0.1.0
-```
-
-原始设计见 [docs/design.md](docs/design.md)，验证范围见 [docs/validation.md](docs/validation.md)。
-
-参考：[gopls MCP](https://go.dev/gopls/features/mcp)、[MCP 生命周期](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle)、[roots](https://modelcontextprotocol.io/specification/2025-11-25/client/roots)、[stdio](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports)、[官方 Go SDK](https://github.com/modelcontextprotocol/go-sdk)。
+四目标采用 `CGO_ENABLED=0` 交叉编译；宿主二进制实际执行 `--help` 和 `--version`，交叉编译成功不等于另外三种架构都完成运行回归。

@@ -1,192 +1,632 @@
 package proxy
 
 import (
-	"context"
+	"bytes"
 	"errors"
 	"fmt"
 	"time"
 
-	"github.com/fredgnr/gopls-mcp-proxy/internal/buildinfo"
-	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/fredgnr/gopls-mcp-proxy/internal/protocol"
+	"github.com/fredgnr/gopls-mcp-proxy/internal/wire"
 )
 
-func toolError(code string, err error) *mcp.CallToolResult {
-	return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: code + ": " + err.Error()}}}
-}
-
-// Call shares one deadline across admission, fingerprint checks, queueing and execution.
-// Once dispatched, a request is never replayed, including after a backend crash.
-func (s *Supervisor) Call(parent context.Context, params *mcp.CallToolParams, progress func(*mcp.ProgressNotificationParams)) (*mcp.CallToolResult, error) {
-	ctx, cancel := context.WithTimeout(parent, s.cfg.RequestTimeout)
-	defer cancel()
-	stop := context.AfterFunc(s.ctx, cancel)
-	defer stop()
-	s.mu.Lock()
-	if s.queued >= s.cfg.QueueLimit {
-		s.mu.Unlock()
-		return toolError("PROXY_QUEUE_FULL", errors.New("request queue is full; retry later")), nil
-	}
-	s.queued++
-	s.mu.Unlock()
-	queued := true
-	defer func() {
-		if queued {
-			s.mu.Lock()
-			s.queued--
-			s.notifyLocked()
-			s.mu.Unlock()
-		}
-	}()
-	var b *state
-	var id uint64
-	for {
-		if err := ctx.Err(); err != nil {
-			if parent.Err() != nil {
-				return nil, parent.Err()
-			}
-			return toolError("PROXY_WAIT_TIMEOUT", fmt.Errorf("workspace is still changing or backend is busy; retry: %w", err)), nil
-		}
-		s.mu.Lock()
-		ch, fatal, lastErr, closed := s.changed, s.fatal, s.lastErr, s.closed
-		b = s.current
-		canDispatch := s.ready && !s.pending && b != nil && !b.invalid && len(b.active) < s.cfg.MaxConcurrent
-		seq := s.eventSeq
-		s.mu.Unlock()
-		if closed {
-			return toolError("PROXY_CLOSED", errors.New("proxy is shutting down")), nil
-		}
-		if fatal != nil {
-			return toolError("PROXY_SESSION_RESTART_REQUIRED", fatal), nil
-		}
-		if lastErr != nil {
-			return toolError("PROXY_BACKEND_UNAVAILABLE", lastErr), nil
-		}
-		if !canDispatch {
-			select {
-			case <-ch:
-				continue
-			case <-ctx.Done():
-				continue
-			}
-		}
-		snap, err := s.tracker.Scan(ctx)
-		if err != nil {
-			s.observe("request_scan_failed")
-			return toolError("PROXY_WORKSPACE_ERROR", err), nil
-		}
-		if snap.Fingerprint != b.fingerprint {
-			s.observe("request_fingerprint")
-			continue
-		}
-		s.mu.Lock()
-		if s.current != b || !s.ready || s.pending || b.invalid || seq != s.eventSeq || len(b.active) >= s.cfg.MaxConcurrent {
-			s.mu.Unlock()
-			continue
-		}
-		select {
-		case <-b.session.Done():
-			s.mu.Unlock()
-			s.observe("request_backend_exit")
-			continue
-		default:
-		}
-		s.requestID++
-		id = s.requestID
-		b.active[id] = cancel
-		s.queued--
-		queued = false
-		s.mu.Unlock()
-		break
-	}
-	defer func() { s.mu.Lock(); delete(b.active, id); s.notifyLocked(); s.mu.Unlock(); s.signal() }()
-	result, err := b.session.Call(ctx, params, func(p *mcp.ProgressNotificationParams) {
-		s.mu.Lock()
-		valid := s.current == b && !b.invalid
-		s.mu.Unlock()
-		if valid && ctx.Err() == nil && progress != nil {
-			progress(p)
-		}
-	})
-	if parent.Err() != nil {
-		return nil, parent.Err()
-	}
-	if ctx.Err() != nil {
-		s.fault(b, "request_timeout")
-		return toolError("PROXY_EXECUTION_TIMEOUT", errors.New("backend request deadline or drain limit exceeded; the request was not replayed")), nil
-	}
+func (r *relay) fromFront(raw []byte) {
+	f, err := wire.ParseFrame(raw)
 	if err != nil {
-		// A protocol-level tool error need not mean the backend died. Connection
-		// failures are observed by the supervisor via Done.
-		return nil, err
+		r.fatal = err
+		return
 	}
-	// Wait for the event quiet window, independently of the drain wait. Waiting
-	// for backend readiness here would deadlock with the supervisor draining us.
-	for {
-		s.mu.Lock()
-		lastEvent := s.lastEvent
-		invalid := b.invalid || s.current != b
-		s.mu.Unlock()
-		if invalid {
-			return toolError("PROXY_STALE_RESULT", fmt.Errorf("generation %d was invalidated; retry against the rebuilt backend", b.generation)), nil
-		}
-		remaining := time.Until(lastEvent.Add(s.cfg.Debounce))
-		if remaining <= 0 {
-			break
-		}
-		timer := time.NewTimer(remaining)
-		select {
-		case <-timer.C:
-		case <-ctx.Done():
-			timer.Stop()
-			return toolError("PROXY_WAIT_TIMEOUT", errors.New("workspace is still changing; retry")), nil
+	if p, known := protocol.Lookup(r.recovery.Revision()); known {
+		if err := protocol.ValidateFrame(p, f); err != nil {
+			r.fatal = err
+			return
 		}
 	}
-	snap, scanErr := s.tracker.Scan(ctx)
-	if scanErr != nil {
-		s.observe("result_scan_failed")
-		return toolError("PROXY_WORKSPACE_ERROR", scanErr), nil
+	for _, m := range f.Messages {
+		if p, known := protocol.Lookup(protocol.Version(m)); known {
+			if err := protocol.ValidateFrame(p, f); err != nil {
+				r.fatal = err
+				return
+			}
+		}
 	}
-	if snap.Fingerprint != b.fingerprint {
-		s.observe("result_fingerprint")
-		return toolError("PROXY_STALE_RESULT", fmt.Errorf("workspace changed during generation %d; result discarded, request not replayed", b.generation)), nil
+	q := &queued{batch: f.Batch, bytes: len(raw), deadline: time.Now().Add(r.cfg.RequestTimeout)}
+	group := &batchGroup{batch: f.Batch}
+	for _, m := range f.Messages {
+		if m.Kind == wire.Response {
+			r.frontResponse(m)
+			continue
+		}
+		if id, ok := protocol.CancellationID(m); ok {
+			r.cancelRequest(m, id)
+			continue
+		}
+		if m.Method == "notifications/progress" {
+			if r.proc == nil || r.phase == "stopping" {
+				continue
+			}
+			if token, ok := protocol.ProgressToken(m); ok {
+				for _, rev := range r.reverse {
+					if rev.boot == r.proc.ID && rev.mappedProgress.Key == token.Key {
+						b, err := wire.Replace(m.Raw, rev.progress.Raw, "params", "progressToken")
+						if err == nil {
+							r.sendBack(b)
+						}
+						break
+					}
+				}
+			}
+			continue
+		}
+		if m.Kind == wire.Notification && isControlNotification(m) && r.proc != nil && (r.phase == "ready" || r.phase == "draining") {
+			r.recovery.ObserveRequest(m)
+			r.sendBack(m.Raw)
+			continue
+		}
+		q.msgs = append(q.msgs, m)
+		if m.Kind == wire.Request {
+			for _, rec := range q.records {
+				if rec.msg.ID.Key == m.ID.Key {
+					r.fatal = errors.New("duplicate request ID in batch")
+					return
+				}
+			}
+			if token, ok := protocol.ProgressToken(m); ok {
+				for _, rec := range r.pending {
+					if rec.progress.Key == token.Key {
+						r.invalidate("ambiguous_progress_reuse")
+					}
+				}
+				for _, prior := range q.msgs[:len(q.msgs)-1] {
+					if tok, ok := protocol.ProgressToken(prior); ok && tok.Key == token.Key {
+						r.fatal = errors.New("duplicate progress token in batch")
+						return
+					}
+				}
+				for _, old := range r.queue {
+					for _, prior := range old.msgs {
+						if tok, ok := protocol.ProgressToken(prior); ok && tok.Key == token.Key {
+							r.fatal = errors.New("duplicate queued progress token")
+							return
+						}
+					}
+				}
+			}
+			if prev := r.pending[m.ID.Key]; prev != nil {
+				if prev.cancelled {
+					r.invalidate("ambiguous_id_reuse")
+				} else {
+					r.fatal = errors.New("duplicate outstanding request ID")
+					return
+				}
+			}
+			for _, old := range r.queue {
+				for _, rec := range old.records {
+					if !rec.cancelled && rec.msg.ID.Key == m.ID.Key {
+						r.fatal = errors.New("duplicate queued request ID")
+						return
+					}
+				}
+			}
+			rec := &record{msg: m, group: group, deadline: q.deadline}
+			q.records = append(q.records, rec)
+			group.remaining++
+		}
 	}
-	s.mu.Lock()
-	invalid := b.invalid || s.current != b
-	if !invalid {
-		s.failures = 0
+	if len(q.msgs) == 0 {
+		return
 	}
-	s.mu.Unlock()
-	if invalid {
-		return toolError("PROXY_STALE_RESULT", fmt.Errorf("generation %d is no longer current", b.generation)), nil
+	if len(q.records) > r.cfg.MaxConcurrent {
+		if len(q.msgs) > len(q.records) {
+			r.fatal = errors.New("mixed batch notification cannot be admitted")
+			return
+		}
+		for _, rec := range q.records {
+			r.finish(rec, r.proxyError(rec, "batch_concurrency_limit"), false)
+		}
+		if len(q.records) == 0 {
+			r.fatal = errors.New("notification capacity exceeded")
+		}
+		return
 	}
-	return result, nil
+	if r.queueCount+len(q.records) > r.cfg.QueueLimit || r.queueBytes+q.bytes > r.cfg.QueueBytes {
+		if len(q.msgs) > len(q.records) {
+			r.fatal = errors.New("notification queue full")
+			return
+		}
+		for _, rec := range q.records {
+			r.finish(rec, r.proxyError(rec, "queue_full"), false)
+		}
+		return
+	}
+	r.poll = true
+	r.queue = append(r.queue, q)
+	r.queueCount += len(q.records)
+	r.queueBytes += q.bytes
+}
+func (r *relay) frontResponse(m wire.Message) {
+	rev, ok := r.reverse[m.ID.Key]
+	if !ok {
+		return
+	}
+	delete(r.reverse, m.ID.Key)
+	if r.proc == nil || rev.boot != r.proc.ID {
+		return
+	}
+	b, err := wire.Replace(m.Raw, rev.original.Raw, "id")
+	if err != nil {
+		r.fatal = err
+		return
+	}
+	if rev.group != nil {
+		r.reverseBytes += len(b)
+		if r.reverseBytes > r.cfg.QueueBytes {
+			r.fatal = errors.New("reverse response byte budget exceeded")
+			return
+		}
+		rev.group.responses = append(rev.group.responses, b)
+		rev.group.remaining--
+		if rev.group.remaining == 0 && len(rev.group.responses) > 0 {
+			for _, raw := range rev.group.responses {
+				r.reverseBytes -= len(raw)
+			}
+			r.sendBack(joinFrame(rev.group.responses, rev.group.batch))
+			rev.group.responses = nil
+		}
+	} else {
+		r.sendBack(b)
+	}
+}
+func (r *relay) cancelRequest(m wire.Message, id wire.ID) {
+	for _, q := range r.queue {
+		for _, rec := range q.records {
+			if !rec.cancelled && rec.msg.ID.Key == id.Key {
+				rec.cancelled = true
+				r.cancelGroup(rec)
+			}
+		}
+	}
+	r.pruneQueue()
+	if rec := r.pending[id.Key]; rec != nil && !rec.cancelled {
+		rec.cancelled = true
+		r.recovery.MarkUncertain(rec.msg)
+		r.cancelGroup(rec)
+		r.sendBack(m.Raw)
+		if !protocol.IsSubscription(rec.msg) {
+			r.invalidate("request_cancelled")
+		} else {
+			rec.long = true
+		}
+	}
+}
+func (r *relay) cancelGroup(rec *record) {
+	if rec.group == nil {
+		return
+	}
+	g := rec.group
+	rec.group = nil
+	if rec.buffered {
+		for i, v := range g.records {
+			if v == rec {
+				r.resultBytes -= len(g.responses[i])
+				g.records = append(g.records[:i], g.records[i+1:]...)
+				g.responses = append(g.responses[:i], g.responses[i+1:]...)
+				g.upstream = append(g.upstream[:i], g.upstream[i+1:]...)
+				break
+			}
+		}
+	} else {
+		g.remaining--
+	}
+	r.flushGroup(g)
+}
+func (r *relay) pruneQueue() {
+	out := r.queue[:0]
+	for _, q := range r.queue {
+		live := map[string]bool{}
+		records := q.records[:0]
+		for _, rec := range q.records {
+			if !rec.cancelled {
+				records = append(records, rec)
+				live[rec.msg.ID.Key] = true
+			} else {
+				r.queueCount--
+			}
+		}
+		q.records = records
+		msgs := q.msgs[:0]
+		for _, m := range q.msgs {
+			if m.Kind != wire.Request || live[m.ID.Key] {
+				msgs = append(msgs, m)
+			}
+		}
+		q.msgs = msgs
+		if len(msgs) == 0 {
+			r.queueBytes -= q.bytes
+		} else {
+			newBytes := len(joinFrame(q.msgsRaw(), q.batch))
+			r.queueBytes += newBytes - q.bytes
+			q.bytes = newBytes
+			out = append(out, q)
+		}
+	}
+	r.queue = out
+}
+func (r *relay) canDispatch(q *queued) bool {
+	if r.phase != "ready" || r.proc == nil {
+		return false
+	}
+	if len(r.pending)+len(q.records) > r.cfg.QueueLimit+r.cfg.MaxConcurrent {
+		return false
+	}
+	pendingBytes := 0
+	for _, rec := range r.pending {
+		pendingBytes += len(rec.msg.Raw)
+	}
+	if pendingBytes+q.bytes > r.cfg.QueueBytes {
+		return false
+	}
+	if r.active()+len(q.records) > r.cfg.MaxConcurrent {
+		return false
+	}
+	for _, rec := range q.records {
+		if r.pending[rec.msg.ID.Key] != nil {
+			return false
+		}
+	}
+	return true
+}
+func (r *relay) dispatch() {
+	q := r.queue[0]
+	r.queue = r.queue[1:]
+	r.queueCount -= len(q.records)
+	r.queueBytes -= q.bytes
+	records := map[string]*record{}
+	for _, rec := range q.records {
+		rec.boot = r.proc.ID
+		rec.generation = r.generation
+		rec.dispatched = true
+		r.pending[rec.msg.ID.Key] = rec
+		records[rec.msg.ID.Key] = rec
+	}
+	raws := make([][]byte, 0, len(q.msgs))
+	for _, m := range q.msgs {
+		b := m.Raw
+		if rec := records[m.ID.Key]; rec != nil {
+			if token, ok := protocol.ProgressToken(m); ok {
+				r.sequence++
+				mapped := wire.StringID(fmt.Sprintf("__proxy/progress/%d/%d", r.proc.ID, r.sequence))
+				rec.progress = token
+				rec.mappedProgress = mapped
+				r.progress[mapped.Key] = rec
+				var err error
+				b, err = wire.Replace(b, mapped.Raw, "params", "_meta", "progressToken")
+				if err != nil {
+					r.fatal = err
+					return
+				}
+			}
+		}
+		if v := protocol.Version(m); v != "" && m.Method != "initialize" {
+			r.recovery.SetRevision(v)
+		}
+		r.recovery.ObserveRequest(m)
+		raws = append(raws, b)
+	}
+	// Ownership is registered before the first potentially partial write. Nothing
+	// after this point can put a request back into the admission queue.
+	r.sendBack(joinFrame(raws, q.batch))
+}
+func joinFrame(raws [][]byte, batch bool) []byte {
+	if len(raws) == 1 && !batch {
+		return raws[0]
+	}
+	return append(append([]byte{'['}, bytes.Join(raws, []byte{','})...), ']')
+}
+func (r *relay) fromBack(raw []byte) {
+	f, err := wire.ParseFrame(raw)
+	if err != nil {
+		r.fatal = fmt.Errorf("backend protocol frame: %w", err)
+		return
+	}
+	if p, known := protocol.Lookup(r.recovery.Revision()); known {
+		if err := protocol.ValidateFrame(p, f); err != nil {
+			r.fatal = err
+			return
+		}
+	}
+	var results []wire.Message
+	var reverseOut [][]byte
+	revGroup := &reverseGroup{batch: f.Batch}
+	for _, m := range f.Messages {
+		if m.Kind == wire.Request {
+			revGroup.remaining++
+		}
+	}
+	for _, m := range f.Messages {
+		if m.Kind == wire.Response {
+			if c, ok := r.controls[m.ID.Key]; ok {
+				delete(r.controls, m.ID.Key)
+				b, err := wire.Replace(m.Raw, c.id.Raw, "id")
+				c.reply <- internalReply{b, err}
+				continue
+			}
+			rec := r.pending[m.ID.Key]
+			if rec == nil {
+				continue
+			}
+			if rec.cancelled {
+				delete(r.pending, m.ID.Key)
+				delete(r.progress, rec.mappedProgress.Key)
+				continue
+			}
+			if rec.received {
+				r.fatal = errors.New("duplicate backend terminal response")
+				return
+			}
+			rec.received = true
+			if rec.long {
+				r.finish(rec, m.Raw, false)
+				delete(r.pending, m.ID.Key)
+				delete(r.progress, rec.mappedProgress.Key)
+				continue
+			}
+			results = append(results, m)
+			continue
+		}
+		if m.Kind == wire.Request {
+			p, _ := protocol.Lookup(r.recovery.Revision())
+			if p.Modern {
+				r.fatal = errors.New("modern backend sent forbidden reverse request")
+				return
+			}
+			for _, rev := range r.reverse {
+				if rev.original.Key == m.ID.Key {
+					r.fatal = errors.New("duplicate backend reverse request ID")
+					return
+				}
+			}
+			if len(r.reverse) >= r.cfg.QueueLimit {
+				r.fatal = errors.New("reverse request capacity exceeded")
+				return
+			}
+			r.sequence++
+			id := wire.StringID(fmt.Sprintf("__proxy/server/%d/%d", r.proc.ID, r.sequence))
+			rev := reverseRecord{original: m.ID, boot: r.proc.ID, deadline: time.Now().Add(r.cfg.RequestTimeout), group: revGroup}
+			if tok, ok := protocol.ProgressToken(m); ok {
+				for _, old := range r.reverse {
+					if old.progress.Key == tok.Key {
+						r.fatal = errors.New("duplicate reverse progress token")
+						return
+					}
+				}
+				rev.progress = tok
+				rev.mappedProgress = wire.StringID(fmt.Sprintf("__proxy/serverprogress/%d/%d", r.proc.ID, r.sequence))
+			}
+			r.reverse[id.Key] = rev
+			b, err := wire.Replace(m.Raw, id.Raw, "id")
+			if err != nil {
+				r.fatal = err
+				return
+			}
+			if rev.mappedProgress.Key != "" {
+				b, err = wire.Replace(b, rev.mappedProgress.Raw, "params", "_meta", "progressToken")
+				if err != nil {
+					r.fatal = err
+					return
+				}
+			}
+			reverseOut = append(reverseOut, b)
+			continue
+		}
+		if id, ok := protocol.CancellationID(m); ok {
+			if rec := r.pending[id.Key]; rec != nil && protocol.IsSubscription(rec.msg) {
+				if !rec.cancelled {
+					rec.cancelled = true
+					r.cancelGroup(rec)
+					r.sendFront(m.Raw)
+				}
+				delete(r.pending, id.Key)
+				delete(r.progress, rec.mappedProgress.Key)
+				continue
+			}
+			for mapped, rev := range r.reverse {
+				if rev.original.Key == id.Key {
+					mid := wire.StringID(mapped[2:])
+					b, err := wire.Replace(m.Raw, mid.Raw, "params", "requestId")
+					if err == nil {
+						r.sendFront(b)
+					}
+					delete(r.reverse, mapped)
+					if rev.group != nil {
+						rev.group.remaining--
+						if rev.group.remaining == 0 && len(rev.group.responses) > 0 {
+							for _, raw := range rev.group.responses {
+								r.reverseBytes -= len(raw)
+							}
+							r.sendBack(joinFrame(rev.group.responses, rev.group.batch))
+							rev.group.responses = nil
+						}
+					}
+					break
+				}
+			}
+			continue
+		}
+		if token, ok := protocol.ProgressToken(m); ok {
+			rec := r.progress[token.Key]
+			if rec == nil || rec.cancelled {
+				continue
+			}
+			b, err := wire.Replace(m.Raw, rec.progress.Raw, "params", "progressToken")
+			if err != nil {
+				r.fatal = err
+				return
+			}
+			r.sendFront(b)
+			continue
+		}
+		if id, ok := protocol.SubscriptionID(m); ok {
+			rec := r.pending[id.Key]
+			if rec == nil || rec.cancelled || !protocol.IsSubscription(rec.msg) {
+				continue
+			}
+			if protocol.IsSubscriptionAck(m) {
+				rec.long = true
+			}
+			r.sendFront(m.Raw)
+			continue
+		}
+		if r.phase != "stopping" {
+			r.sendFront(m.Raw)
+		}
+	}
+	if len(reverseOut) > 0 {
+		r.sendFront(joinFrame(reverseOut, f.Batch))
+	}
+	if len(results) > 0 {
+		if r.resultBytes+len(raw) > r.cfg.QueueBytes {
+			r.fatal = errors.New("pending result byte budget exceeded")
+			return
+		}
+		r.results = append(r.results, resultFrame{results, r.proc.ID, len(raw)})
+		r.resultBytes += len(raw)
+	}
+}
+func (r *relay) deliverResults(frames []resultFrame, fresh bool, reason string) {
+	for _, f := range frames {
+		r.resultBytes -= f.bytes
+	}
+	if r.resultBytes < 0 {
+		r.resultBytes = 0
+	}
+	for _, f := range frames {
+		for _, m := range f.msgs {
+			rec := r.pending[m.ID.Key]
+			if rec == nil || rec.boot != f.boot {
+				continue
+			}
+			if rec.cancelled {
+				delete(r.pending, m.ID.Key)
+				delete(r.progress, rec.mappedProgress.Key)
+				continue
+			}
+			if fresh {
+				r.finish(rec, m.Raw, true)
+			} else {
+				r.finish(rec, r.proxyError(rec, reason), false)
+			}
+		}
+	}
+}
+func (r *relay) finish(rec *record, raw []byte, upstream bool) {
+	if rec.cancelled || rec.group == nil {
+		return
+	}
+	g := rec.group
+	if rec.buffered {
+		for i, v := range g.records {
+			if v == rec {
+				r.resultBytes += len(raw) - len(g.responses[i])
+				g.responses[i] = raw
+				g.upstream[i] = upstream
+				break
+			}
+		}
+	} else {
+		rec.buffered = true
+		g.records = append(g.records, rec)
+		g.responses = append(g.responses, raw)
+		g.upstream = append(g.upstream, upstream)
+		g.remaining--
+		r.resultBytes += len(raw)
+	}
+	if r.resultBytes > r.cfg.QueueBytes {
+		r.fatal = errors.New("buffered response byte budget exceeded")
+		return
+	}
+	r.flushGroup(g)
+}
+func (r *relay) flushGroup(g *batchGroup) {
+	if g.done || g.remaining != 0 {
+		return
+	}
+	hasSuccess := false
+	for _, v := range g.upstream {
+		hasSuccess = hasSuccess || v
+	}
+	if hasSuccess && r.phase == "ready" {
+		if !g.queued {
+			g.queued = true
+			r.readyBatches = append(r.readyBatches, g)
+		}
+		return
+	}
+	r.deliverBatch(g, false)
+}
+func (r *relay) deliverBatch(g *batchGroup, fresh bool) {
+	if g.done {
+		return
+	}
+	g.done = true
+	for i, rec := range g.records {
+		r.resultBytes -= len(g.responses[i])
+		if g.upstream[i] {
+			if !fresh || rec.generation != r.generation || r.proc == nil || rec.boot != r.proc.ID || r.tracker.Epoch() != r.snapshot.Epoch {
+				g.responses[i] = r.proxyError(rec, "workspace_changed")
+			} else {
+				m, err := wire.ParseMessage(g.responses[i])
+				if err == nil {
+					r.recovery.ObserveResponse(rec.msg, m)
+				}
+			}
+		}
+		rec.group = nil
+		if r.pending[rec.msg.ID.Key] == rec {
+			delete(r.pending, rec.msg.ID.Key)
+			delete(r.progress, rec.mappedProgress.Key)
+		}
+	}
+	if r.resultBytes < 0 {
+		r.resultBytes = 0
+	}
+	if len(g.responses) > 0 {
+		r.sendFront(joinFrame(g.responses, g.batch))
+	}
+	g.responses = nil
+	g.records = nil
+}
+func (r *relay) proxyError(rec *record, reason string) []byte {
+	if rec.dispatched {
+		r.recovery.MarkUncertain(rec.msg)
+	}
+	return protocol.ErrorResponse(rec.msg.ID, reason, rec.generation, rec.dispatched, rec.received)
+}
+func (r *relay) endSubscriptions() {
+	for _, rec := range r.pending {
+		if protocol.IsSubscription(rec.msg) && !rec.cancelled {
+			r.sendFront(protocol.Cancellation(rec.msg.ID, "backend refreshed; establish a new subscription"))
+			r.sendBack(protocol.Cancellation(rec.msg.ID, "backend refresh"))
+			rec.cancelled = true
+			r.cancelGroup(rec)
+			rec.long = true
+		}
+	}
 }
 
-func (s *Supervisor) fault(b *state, reason string) {
-	s.mu.Lock()
-	if s.current == b {
-		b.fault = reason
+// Only protocol control messages may bypass an earlier queued ordinary message.
+func isControlNotification(m wire.Message) bool {
+	switch m.Method {
+	case "notifications/initialized", "notifications/roots/list_changed":
+		return true
 	}
-	s.mu.Unlock()
-	s.observe(reason)
+	return false
 }
 
-func (s *Supervisor) Server(tools []*mcp.Tool, instructions string) *mcp.Server {
-	server := mcp.NewServer(&mcp.Implementation{Name: "gopls-mcp-proxy", Version: buildinfo.Version}, &mcp.ServerOptions{
-		Instructions:              instructions,
-		Logger:                    s.cfg.Logger,
-		Capabilities:              &mcp.ServerCapabilities{Tools: &mcp.ToolCapabilities{}},
-		SupportedProtocolVersions: []string{backendProtocolVersion, "2025-06-18", "2025-03-26", "2024-11-05"},
-	})
-	for _, tool := range tools {
-		// The non-generic AddTool path preserves the backend schema and result.
-		server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			return s.Call(ctx, &mcp.CallToolParams{Name: req.Params.Name, Arguments: req.Params.Arguments, Meta: req.Params.Meta}, func(p *mcp.ProgressNotificationParams) {
-				_ = req.Session.NotifyProgress(ctx, p)
-			})
-		})
+func (q *queued) msgsRaw() [][]byte {
+	out := make([][]byte, len(q.msgs))
+	for i, m := range q.msgs {
+		out[i] = m.Raw
 	}
-	return server
+	return out
 }
-
-const backendProtocolVersion = "2025-11-25"

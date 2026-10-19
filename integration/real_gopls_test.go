@@ -1,22 +1,24 @@
 package integration
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// This is deliberately opt-in: it needs a real gopls and Go module downloads.
-// CI runs it on both Linux and macOS with a pinned gopls version.
+// The mandatory raw helper suite establishes causation without a self-refreshing
+// backend. This separately checks pinned real gopls interoperability on CI.
 func TestRealGoplsTwoProtobufUpgrades(t *testing.T) {
 	if os.Getenv("GOPLS_INTEGRATION") != "1" {
-		t.Skip("set GOPLS_INTEGRATION=1 and install gopls to run the real process acceptance test")
+		t.Skip("set GOPLS_INTEGRATION=1; dedicated interoperability CI must enable this test")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
@@ -24,27 +26,31 @@ func TestRealGoplsTwoProtobufUpgrades(t *testing.T) {
 	if gopls == "" {
 		gopls = "gopls"
 	}
-	gopls, err := exec.LookPath(gopls)
+	var err error
+	gopls, err = exec.LookPath(gopls)
 	if err != nil {
 		t.Fatal(err)
 	}
+	for _, command := range [][]string{{"go", "version"}, {gopls, "version"}} {
+		output, err := exec.CommandContext(ctx, command[0], command[1:]...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("version evidence: %v: %s", err, output)
+		}
+		t.Logf("%s", bytes.TrimSpace(output))
+	}
 	root := t.TempDir()
+	archiveEvidence(t, root)
 	root, err = filepath.EvalSymlinks(root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	workspace := filepath.Join(root, "workspace")
-	if err := os.Mkdir(workspace, 0755); err != nil {
+	if err := os.Mkdir(workspace, 0700); err != nil {
 		t.Fatal(err)
-	}
-	bin := filepath.Join(root, "gopls-mcp-proxy")
-	build := exec.CommandContext(ctx, "go", "build", "-o", bin, "../cmd/gopls-mcp-proxy")
-	if output, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build: %v\n%s", err, output)
 	}
 	write := func(path, value string) {
 		t.Helper()
-		if err := os.WriteFile(path, []byte(value), 0644); err != nil {
+		if err := os.WriteFile(path, []byte(value), 0600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -61,81 +67,151 @@ func TestRealGoplsTwoProtobufUpgrades(t *testing.T) {
 		}
 	}
 	setVersion("v1.34.2")
-	logPath := filepath.Join(root, "proxy.log")
-	logFile, err := os.Create(logPath)
-	if err != nil {
-		t.Fatal(err)
+	startGopls := func(proxied bool) *rawPeer {
+		t.Helper()
+		var cmd *exec.Cmd
+		name := "direct.log"
+		if proxied {
+			name = "proxy.log"
+			cmd = exec.CommandContext(ctx, proxyBinary(t), "--disable-watcher", "--poll-interval", "1h", "--debounce", "50ms", "--startup-timeout", "45s", "--request-timeout", "90s", "--", gopls, "mcp")
+		} else {
+			cmd = exec.CommandContext(ctx, gopls, "mcp")
+		}
+		cmd.Dir = workspace
+		cmd.Env = append(os.Environ(), "GOWORK=off")
+		p := startPeer(t, cmd, filepath.Join(root, name))
+		p.timeout = 95 * time.Second
+		p.roots = []map[string]string{{"uri": (&url.URL{Scheme: "file", Path: filepath.ToSlash(workspace)}).String(), "name": "actual client workspace"}}
+		reply := p.call("100", "initialize", `{"protocolVersion":"2025-11-25","clientInfo":{"name":"raw-gopls-acceptance","version":"1"},"capabilities":{"roots":{"listChanged":true}}}`)
+		if bytes.Contains(reply, []byte(`"error"`)) {
+			t.Fatalf("initialize: %s", reply)
+		}
+		p.send(`{"jsonrpc":"2.0","method":"notifications/initialized"}`)
+		return p
 	}
-	defer logFile.Close()
-	cmd := exec.Command(bin, "--gopls", gopls, "--workspace", workspace, "--debounce", "100ms", "--poll-interval", "200ms", "--startup-timeout", "45s", "--request-timeout", "60s")
-	cmd.Env = append(os.Environ(), "GOWORK=off")
-	cmd.Stderr = logFile
-	client := mcp.NewClient(&mcp.Implementation{Name: "acceptance-client", Version: "1"}, nil)
-	session, err := client.Connect(ctx, &mcp.CommandTransport{Command: cmd, TerminateDuration: 5 * time.Second}, &mcp.ClientSessionOptions{ProtocolVersion: "2025-11-25"})
-	if err != nil {
-		logs, _ := os.ReadFile(logPath)
-		t.Fatalf("connect: %v\n%s", err, logs)
+	p := startGopls(true)
+	proxyPID := p.cmd.Process.Pid
+	// Compare a complete, unchanged tools directory from an independent raw client.
+	direct := startGopls(false)
+	directTools := direct.call(`"catalog"`, "tools/list", `{}`)
+	proxyTools := p.call(`"catalog"`, "tools/list", `{}`)
+	if !rawJSONEqual(directTools, proxyTools) {
+		t.Fatalf("native tools directory differs:\ndirect=%s\nproxy=%s", directTools, proxyTools)
 	}
-	defer session.Close()
-	pid := cmd.Process.Pid
-	previousGenerationCount := 0
+	_ = direct.in.Close()
+	callTool := func(id, name string, args map[string]string) string {
+		t.Helper()
+		params, _ := json.Marshal(map[string]any{"name": name, "arguments": args})
+		raw := p.call(id, "tools/call", string(params))
+		var msg struct {
+			Result struct {
+				IsError bool `json:"isError"`
+				Content []struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				} `json:"content"`
+			} `json:"result"`
+			Error json.RawMessage `json:"error"`
+		}
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			t.Fatal(err)
+		}
+		if len(msg.Error) > 0 || msg.Result.IsError {
+			t.Fatalf("native %s failed: %s", name, raw)
+		}
+		var text strings.Builder
+		for _, c := range msg.Result.Content {
+			text.WriteString(c.Text)
+		}
+		return text.String()
+	}
+	generation := func() int { logs, _ := os.ReadFile(p.log); return strings.Count(string(logs), `"msg":"backend ready"`) }
+	previousGeneration := 0
 	for i, version := range []string{"v1.34.2", "v1.35.2", "v1.36.6"} {
 		if i > 0 {
 			setVersion(version)
 		}
-		res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "go_file_context", Arguments: map[string]any{"file": goFile}})
-		var text strings.Builder
-		if res != nil {
-			for _, c := range res.Content {
-				if c, ok := c.(*mcp.TextContent); ok {
-					text.WriteString(c.Text)
-				}
-			}
+		text := callTool(fmt.Sprint(i+1), "go_file_context", map[string]string{"file": goFile})
+		if !strings.Contains(text, "protobuf@"+version+"/") {
+			t.Fatalf("resolved wrong protobuf version %s: %s", version, text)
 		}
-		if err != nil || res == nil || res.IsError || !strings.Contains(text.String(), "protobuf@"+version+"/") {
-			logs, _ := os.ReadFile(logPath)
-			t.Fatalf("version %s: err=%v result=%s\n%s", version, err, text.String(), logs)
+		current := generation()
+		if current <= previousGeneration {
+			logs, _ := os.ReadFile(p.log)
+			t.Fatalf("upgrade did not publish new backend: %s", logs)
 		}
-		if cmd.Process.Pid != pid {
-			t.Fatal("upstream proxy process changed")
+		if p.cmd.Process.Pid != proxyPID {
+			t.Fatal("proxy PID changed")
 		}
-		if err := session.Ping(ctx, nil); err != nil {
-			t.Fatal(err)
-		}
-		logs, _ := os.ReadFile(logPath)
-		count := strings.Count(string(logs), `"msg":"backend ready"`)
-		if count <= previousGenerationCount {
-			t.Fatalf("upgrade did not publish a new generation: %s", logs)
-		}
-		previousGenerationCount = count
-		t.Logf("same MCP session, proxy pid=%d, resolved protobuf@%s", pid, version)
+		previousGeneration = current
+		t.Logf("VAL-GOPLS-001 proxy_pid=%d published_generations=%d protobuf=%s", proxyPID, current, version)
 	}
-	// gopls must also receive roots: content edits are handled by its own watcher.
+	// Ordinary source edits now require a proxy-owned replacement. No assertion
+	// relies on gopls' own watcher or keeps generation unchanged.
+	verifyChange := func(id, query, want string) {
+		t.Helper()
+		text := callTool(id, "go_search", map[string]string{"query": query})
+		if !strings.Contains(text, want) {
+			t.Fatalf("source result missing %q: %s", want, text)
+		}
+		current := generation()
+		if current <= previousGeneration {
+			logs, _ := os.ReadFile(p.log)
+			t.Fatalf("source change failed to replace backend: %s", logs)
+		}
+		previousGeneration = current
+		t.Logf("VAL-GOPLS-002 proxy_pid=%d published_generations=%d query=%s", proxyPID, current, query)
+	}
 	write(goFile, "package fixture\nimport \"google.golang.org/protobuf/proto\"\nvar Unmarshal = proto.Unmarshal\n")
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "go_search", Arguments: map[string]any{"query": "Unmarshal"}})
-		found := false
-		if res != nil && !res.IsError {
-			for _, c := range res.Content {
-				if c, ok := c.(*mcp.TextContent); ok && strings.Contains(c.Text, "Unmarshal") && strings.Contains(c.Text, goFile) {
-					found = true
-				}
-			}
-		}
-		if err == nil && found {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("gopls did not observe ordinary content edit through roots watcher")
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	if err := session.Close(); err != nil {
+	verifyChange("10", "Unmarshal", goFile)
+	added := filepath.Join(workspace, "added.go")
+	write(added, "package fixture\nvar FixtureAddedSymbol = 7\n")
+	verifyChange("11", "FixtureAddedSymbol", added)
+	if err := os.Remove(added); err != nil {
 		t.Fatal(err)
 	}
-	logs, _ := os.ReadFile(logPath)
-	if count := strings.Count(string(logs), `"msg":"backend ready"`); count != previousGenerationCount {
-		t.Fatalf("content edit rebuilt backend: before=%d after=%d:\n%s", previousGenerationCount, count, logs)
+	verifyChange("12", "Unmarshal", goFile)
+	temporary := filepath.Join(workspace, "save.tmp")
+	write(temporary, "package fixture\nimport \"google.golang.org/protobuf/proto\"\nvar FixtureAtomicMarshal = proto.Marshal\n")
+	if err := os.Rename(temporary, goFile); err != nil {
+		t.Fatal(err)
 	}
+	verifyChange("13", "FixtureAtomicMarshal", goFile)
+	logs, _ := os.ReadFile(p.log)
+	seenBoots := map[uint64]bool{}
+	lastGeneration := uint64(0)
+	for _, line := range bytes.Split(logs, []byte{'\n'}) {
+		var event struct {
+			Message    string `json:"msg"`
+			Generation uint64 `json:"generation"`
+			Boot       uint64 `json:"boot_id"`
+			PID        int    `json:"pid"`
+		}
+		if json.Unmarshal(line, &event) != nil || event.Message != "backend ready" {
+			continue
+		}
+		if event.Boot == 0 || event.PID <= 0 || seenBoots[event.Boot] || event.Generation <= lastGeneration {
+			t.Fatalf("invalid published backend identity: %s", line)
+		}
+		seenBoots[event.Boot] = true
+		lastGeneration = event.Generation
+	}
+	if len(seenBoots) != 7 {
+		t.Fatalf("want seven published boot identities, got %d", len(seenBoots))
+	}
+	t.Logf("real gopls evidence:\n%s", logs)
+}
+
+func rawJSONEqual(a, b []byte) bool {
+	var aa, bb any
+	ad := json.NewDecoder(bytes.NewReader(a))
+	ad.UseNumber()
+	bd := json.NewDecoder(bytes.NewReader(b))
+	bd.UseNumber()
+	if ad.Decode(&aa) != nil || bd.Decode(&bb) != nil {
+		return false
+	}
+	ac, _ := json.Marshal(aa)
+	bc, _ := json.Marshal(bb)
+	return bytes.Equal(ac, bc)
 }
