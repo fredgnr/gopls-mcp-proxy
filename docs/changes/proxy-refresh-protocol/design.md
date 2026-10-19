@@ -1,6 +1,6 @@
 # 技术设计
 
-状态：Proposed。本文中的接口、默认值和行为是实现目标，尚未发布。基线与阅读入口见 [README](README.md)。
+状态：Implemented。本文保留目标设计；实际实现细节、验收证据与限制见 [实施记录](implementation-results.md)。本次尚未发布版本 tag。基线与阅读入口见 [README](README.md)。
 
 ## 1. 需求和不变量
 

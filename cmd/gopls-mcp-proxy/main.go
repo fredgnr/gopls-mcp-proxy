@@ -1,17 +1,15 @@
 package main
 
 import (
-	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
-	"os/exec"
 	"os/signal"
-	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -20,13 +18,36 @@ import (
 	"github.com/fredgnr/gopls-mcp-proxy/internal/buildinfo"
 	"github.com/fredgnr/gopls-mcp-proxy/internal/proxy"
 	"github.com/fredgnr/gopls-mcp-proxy/internal/workspace"
-	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 type paths []string
 
-func (p *paths) String() string         { return strings.Join(*p, ",") }
-func (p *paths) Set(value string) error { *p = append(*p, value); return nil }
+func (p *paths) String() string { return strings.Join(*p, ",") }
+func (p *paths) Set(value string) error {
+	if value == "" {
+		return errors.New("value must not be empty")
+	}
+	*p = append(*p, value)
+	return nil
+}
+
+type removedFlag string
+
+func (f removedFlag) String() string   { return "" }
+func (f removedFlag) IsBoolFlag() bool { return true }
+func (f removedFlag) Set(string) error {
+	return fmt.Errorf("--%s was removed: set the caller's working directory, use --watch-root for extra inputs, and start with -- program argv (for example -- gopls mcp)", f)
+}
+
+type options struct {
+	cfg                          proxy.Config
+	program                      string
+	argv                         []string
+	watchRoots, include, exclude paths
+	goDiscovery                  bool
+	shutdown                     time.Duration
+	version, help                bool
+}
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -37,122 +58,101 @@ func main() {
 	}
 }
 
-func run(ctx context.Context, args []string) error {
-	cfg := proxy.DefaultConfig()
+func parseOptions(args []string, stderr io.Writer) (options, error) {
+	o := options{cfg: proxy.DefaultConfig()}
+	boundary := slices.Index(args, "--")
+	flagsArgs := args
+	if boundary >= 0 {
+		flagsArgs = args[:boundary]
+	}
 	flags := flag.NewFlagSet("gopls-mcp-proxy", flag.ContinueOnError)
-	flags.SetOutput(os.Stderr)
-	gopls := flags.String("gopls", "gopls", "gopls executable (fixed for this proxy session)")
-	root := flags.String("workspace", ".", "workspace directory")
-	var replacements paths
-	flags.Var(&replacements, "replace-dir", "additional local replace directory to track (repeatable, relative to workspace)")
-	flags.DurationVar(&cfg.Debounce, "debounce", cfg.Debounce, "quiet window before verifying filesystem events")
-	flags.DurationVar(&cfg.PollInterval, "poll-interval", cfg.PollInterval, "full fingerprint polling interval")
-	flags.DurationVar(&cfg.DrainTimeout, "drain-timeout", cfg.DrainTimeout, "maximum wait for active requests before stopping gopls")
-	flags.DurationVar(&cfg.StartupTimeout, "startup-timeout", cfg.StartupTimeout, "backend initialization deadline")
-	flags.DurationVar(&cfg.RequestTimeout, "request-timeout", cfg.RequestTimeout, "total queue, check and execution budget per tool call")
-	flags.DurationVar(&cfg.RetryMin, "retry-min", cfg.RetryMin, "initial restart backoff")
-	flags.DurationVar(&cfg.RetryMax, "retry-max", cfg.RetryMax, "maximum restart backoff")
-	flags.IntVar(&cfg.QueueLimit, "queue-limit", cfg.QueueLimit, "maximum pending tool calls")
-	flags.IntVar(&cfg.MaxConcurrent, "max-concurrent", cfg.MaxConcurrent, "maximum executing tool calls")
-	shutdown := flags.Duration("shutdown-timeout", 2*time.Second, "grace period for each shutdown stage")
-	version := flags.Bool("version", false, "print version to stderr and exit")
-	if err := flags.Parse(args); err != nil {
+	flags.SetOutput(stderr)
+	for _, name := range []string{"gopls", "workspace", "replace-dir"} {
+		flags.Var(removedFlag(name), name, "removed; use caller cwd, --watch-root and -- program argv")
+	}
+	flags.Usage = func() {
+		fmt.Fprintln(stderr, "Usage: gopls-mcp-proxy [proxy options] -- program [backend arguments...]")
+		fmt.Fprintln(stderr, "The backend inherits cwd and environment. Arguments after -- are passed unchanged.")
+		flags.PrintDefaults()
+	}
+	flags.Var(&o.watchRoots, "watch-root", "additional input directory or file (repeatable; relative to cwd)")
+	flags.Var(&o.include, "include", "include root-relative glob (repeatable; supports **)")
+	flags.Var(&o.exclude, "exclude", "exclude root-relative glob (repeatable; exclusion wins)")
+	flags.BoolVar(&o.goDiscovery, "go-discovery", false, "optionally discover additional Go workspace input roots")
+	flags.DurationVar(&o.cfg.Debounce, "debounce", o.cfg.Debounce, "quiet window before refreshing changed inputs")
+	flags.DurationVar(&o.cfg.MaxDebounce, "max-debounce", o.cfg.MaxDebounce, "maximum event merging window")
+	flags.DurationVar(&o.cfg.PollInterval, "poll-interval", o.cfg.PollInterval, "full content fingerprint polling interval")
+	flags.DurationVar(&o.cfg.DrainTimeout, "drain-timeout", o.cfg.DrainTimeout, "maximum wait for active finite requests")
+	flags.DurationVar(&o.cfg.StartupTimeout, "startup-timeout", o.cfg.StartupTimeout, "backend startup and protocol recovery deadline")
+	flags.DurationVar(&o.cfg.RefreshTimeout, "refresh-timeout", o.cfg.RefreshTimeout, "total recovery budget from first confirmed invalidation")
+	flags.DurationVar(&o.cfg.CleanupTimeout, "cleanup-timeout", o.cfg.CleanupTimeout, "final process cleanup budget")
+	flags.DurationVar(&o.cfg.RequestTimeout, "request-timeout", o.cfg.RequestTimeout, "total finite request admission and execution budget")
+	flags.DurationVar(&o.cfg.RetryMin, "retry-min", o.cfg.RetryMin, "initial restart backoff")
+	flags.DurationVar(&o.cfg.RetryMax, "retry-max", o.cfg.RetryMax, "maximum restart backoff")
+	flags.IntVar(&o.cfg.QueueLimit, "queue-limit", o.cfg.QueueLimit, "maximum queued requests; batches count each request")
+	flags.IntVar(&o.cfg.QueueBytes, "queue-bytes", o.cfg.QueueBytes, "maximum queued message bytes")
+	flags.IntVar(&o.cfg.MaxFrameBytes, "max-frame-bytes", o.cfg.MaxFrameBytes, "maximum bytes in one stdio frame")
+	flags.IntVar(&o.cfg.MaxConcurrent, "max-concurrent", o.cfg.MaxConcurrent, "maximum executing finite requests")
+	flags.BoolVar(&o.cfg.DisableWatcher, "disable-watcher", false, "use content polling and request checks without filesystem events")
+	flags.DurationVar(&o.shutdown, "shutdown-timeout", 2*time.Second, "grace period after stdin EOF and after TERM")
+	flags.BoolVar(&o.version, "version", false, "print proxy version to stderr and exit")
+	if err := flags.Parse(flagsArgs); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
-			return nil
+			o.help = true
+			return o, nil
 		}
-		return err
+		return o, err
 	}
 	if flags.NArg() != 0 {
-		return fmt.Errorf("unexpected positional arguments: %v", flags.Args())
+		return o, fmt.Errorf("unexpected arguments before --: %v; use -- program argv", flags.Args())
 	}
-	if *version {
+	if o.version || o.help {
+		return o, nil
+	}
+	if boundary < 0 || boundary+1 >= len(args) || args[boundary+1] == "" {
+		return o, errors.New("backend program is required: gopls-mcp-proxy [proxy options] -- program [arguments...]")
+	}
+	o.program = args[boundary+1]
+	o.argv = slices.Clone(args[boundary+2:])
+	if err := o.cfg.Validate(); err != nil {
+		return o, err
+	}
+	if o.shutdown <= 0 {
+		return o, errors.New("shutdown-timeout must be positive")
+	}
+	return o, nil
+}
+
+func run(ctx context.Context, args []string) error {
+	o, err := parseOptions(args, os.Stderr)
+	if err != nil {
+		return err
+	}
+	if o.help {
+		return nil
+	}
+	if o.version {
 		fmt.Fprintf(os.Stderr, "gopls-mcp-proxy %s (commit %s)\n", buildinfo.Version, buildinfo.Commit)
 		return nil
 	}
-	if err := cfg.Validate(); err != nil {
-		return err
-	}
-	if *shutdown <= 0 {
-		return fmt.Errorf("shutdown-timeout must be positive")
-	}
-	absolute, err := filepath.Abs(*root)
-	if err != nil {
-		return err
-	}
-	absolute, err = filepath.EvalSymlinks(absolute)
-	if err != nil {
-		return err
-	}
-	env, err := goEnvironment(ctx, absolute)
+	cwd, err := os.Getwd()
 	if err != nil {
 		return err
 	}
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
-	cfg.Logger = logger
-	tracker, err := workspace.New(workspace.Config{Workspace: absolute, WorkFile: env["GOWORK"], ReplaceDirs: replacements, ExcludeDirs: []string{env["GOMODCACHE"], env["GOROOT"]}}, logger)
+	o.cfg.Logger = logger
+	trackerCfg := workspace.Config{Workspace: cwd, WatchRoots: o.watchRoots, Include: o.include, Exclude: o.exclude, GoDiscovery: o.goDiscovery}
+	if o.goDiscovery {
+		trackerCfg.WorkFile = os.Getenv("GOWORK")
+	}
+	tracker, err := workspace.New(trackerCfg, logger)
 	if err != nil {
 		return err
 	}
-	factory, err := backend.NewFactory(backend.Config{Executable: *gopls, Workspace: absolute, ShutdownTimeout: *shutdown, Logger: logger})
+	factory, err := backend.NewFactory(backend.Config{Executable: o.program, Args: o.argv, Workspace: cwd, Env: os.Environ(), ShutdownTimeout: o.shutdown, CleanupTimeout: o.cfg.CleanupTimeout, Logger: logger})
 	if err != nil {
 		return err
 	}
-	supervisor, err := proxy.New(ctx, cfg, tracker, factory)
-	if err != nil {
-		return err
-	}
-	defer supervisor.Close()
-	startupCtx, cancel := context.WithTimeout(ctx, cfg.StartupTimeout)
-	tools, instructions, err := supervisor.WaitReady(startupCtx)
-	cancel()
-	if err != nil {
-		return err
-	}
-	server := supervisor.Server(tools, instructions)
-	err = server.Run(ctx, &mcp.StdioTransport{})
-	if ctx.Err() != nil {
-		return nil
-	}
-	return err
-}
-
-// Resolve cache exclusions and persisted GOWORK without loading the module graph.
-// An unset GOWORK stays automatic so newly added/deleted ancestor go.work files
-// are discovered on every scan. Explicit environment values override GOENV.
-func goEnvironment(ctx context.Context, dir string) (map[string]string, error) {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "go", "env", "-json", "GOENV", "GOMODCACHE", "GOROOT")
-	cmd.Dir = dir
-	output, err := cmd.Output()
-	if err != nil {
-		var ee *exec.ExitError
-		if errors.As(err, &ee) {
-			return nil, fmt.Errorf("go env: %w: %s", err, ee.Stderr)
-		}
-		return nil, fmt.Errorf("go env: %w", err)
-	}
-	values := map[string]string{}
-	if err = json.Unmarshal(output, &values); err != nil {
-		return nil, err
-	}
-	if file := values["GOENV"]; file != "" && file != "off" {
-		data, err := os.ReadFile(file)
-		if err != nil && !os.IsNotExist(err) {
-			return nil, err
-		}
-		scan := bufio.NewScanner(strings.NewReader(string(data)))
-		for scan.Scan() {
-			if v, ok := strings.CutPrefix(scan.Text(), "GOWORK="); ok {
-				values["GOWORK"] = v
-			}
-		}
-		if err := scan.Err(); err != nil {
-			return nil, err
-		}
-	}
-	if value := os.Getenv("GOWORK"); value != "" {
-		values["GOWORK"] = value
-	}
-	return values, nil
+	logger.Info("proxy starting", "version", buildinfo.Version, "commit", buildinfo.Commit)
+	return proxy.Run(ctx, o.cfg, tracker, factory, os.Stdin, os.Stdout)
 }

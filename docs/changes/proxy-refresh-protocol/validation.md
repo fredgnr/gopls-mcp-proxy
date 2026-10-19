@@ -1,6 +1,6 @@
 # 验收计划
 
-状态：本文件全部用例为 **pending / 尚未执行**。本次文档评审和原有 CI 的通过，不代表这些新行为已经通过。设计依据见 [技术设计](design.md)，任务映射见 [实施计划](implementation-plan.md)。
+状态：**验收场景目录；实际断言与执行结果另行记录**。本轮已实施并运行组件、raw helper 和真实 gopls 测试；对应入口与边界见 [实施记录](implementation-results.md)。本文件不把未逐项运行的组合自动标为 pass。设计依据见 [技术设计](design.md)，任务映射见 [实施计划](implementation-plan.md)。
 
 ## 1. 证据原则
 

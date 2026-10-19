@@ -47,14 +47,36 @@ jobs:
       - name: Format
         shell: bash
         run: test -z "$(gofmt -l .)"
-      - run: go vet ./...
-      - run: go test -race ./...
+      - name: Vet
+        run: go vet ./...
+      - name: Unit and protocol components (race)
+        shell: bash
+        run: |
+          mkdir -p test-results
+          go test -race -json ./cmd/... ./internal/... -count=1 | tee test-results/unit.json
+      - name: Raw backend independent refresh and protocol contract (required)
+        env:
+          PROXY_TEST_EVIDENCE_DIR: ${{ runner.temp }}/proxy-evidence
+        shell: bash
+        run: go test -race -json ./integration -run '^TestRaw' -count=1 | tee test-results/raw-contract.json
       - run: go build ./cmd/gopls-mcp-proxy
       - name: Install pinned gopls
         if: matrix.integration
         run: go install golang.org/x/tools/gopls@v0.24.0
-      - name: Same-session protobuf upgrades and content edits
+      - name: Real gopls interoperability and proxy-owned content refresh
         if: matrix.integration
         env:
           GOPLS_INTEGRATION: '1'
-        run: go test -v ./integration -count=1
+          PROXY_TEST_EVIDENCE_DIR: ${{ runner.temp }}/proxy-evidence
+        shell: bash
+        run: go test -json ./integration -run '^TestRealGopls' -count=1 | tee test-results/real-gopls.json
+      - name: Upload test evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: test-results-${{ matrix.os }}-go-${{ matrix.go }}
+          path: |
+            test-results/*.json
+            ${{ runner.temp }}/proxy-evidence/**
+          if-no-files-found: ignore
+          retention-days: 14

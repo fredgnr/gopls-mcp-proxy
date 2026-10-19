@@ -45,7 +45,7 @@ func TestFingerprintRules(t *testing.T) {
 		change    func(*testing.T, string)
 		different bool
 	}{
-		{"go_content", func(t *testing.T, r string) { write(t, filepath.Join(r, "a.go"), "package other\n") }, false},
+		{"go_content", func(t *testing.T, r string) { write(t, filepath.Join(r, "a.go"), "package other\n") }, true},
 		{"mtime_only", func(t *testing.T, r string) {
 			now := time.Now().Add(time.Hour)
 			if err := os.Chtimes(filepath.Join(r, "go.mod"), now, now); err != nil {
@@ -76,10 +76,10 @@ func TestFingerprintRules(t *testing.T) {
 			if err := os.Rename(filepath.Join(r, "tmp"), filepath.Join(r, "a.go")); err != nil {
 				t.Fatal(err)
 			}
-		}, false},
+		}, true},
 		{"empty_sum_addition", func(t *testing.T, r string) { write(t, filepath.Join(r, "go.sum"), "") }, true},
 		{"work_sum_addition", func(t *testing.T, r string) { write(t, filepath.Join(r, "go.work.sum"), "new sum\n") }, true},
-		{"unrelated", func(t *testing.T, r string) { write(t, filepath.Join(r, "README.md"), "text") }, false},
+		{"resource_content", func(t *testing.T, r string) { write(t, filepath.Join(r, "README.md"), "text") }, true},
 		{"ignored_git", func(t *testing.T, r string) { write(t, filepath.Join(r, ".git", "objects", "a.go"), "ignored") }, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -112,7 +112,7 @@ func TestWorkspaceScopeDiscoveryAndChanges(t *testing.T) {
 		write(t, filepath.Join(dir, "a.go"), "package example\n")
 	}
 	write(t, filepath.Join(base, "go.work"), "go 1.25.0\nuse (\n./app\n./other\n)\n")
-	tr := tracker(t, Config{Workspace: root, ReplaceDirs: []string{replacement}})
+	tr := tracker(t, Config{Workspace: root, ReplaceDirs: []string{replacement}, GoDiscovery: true})
 	s := scan(t, tr)
 	for _, dir := range []string{root, other, replacement} {
 		if !slices.Contains(s.Roots, dir) {
@@ -143,8 +143,8 @@ func TestInvalidDependencyAndSafeScanBoundaries(t *testing.T) {
 	r := t.TempDir()
 	write(t, filepath.Join(r, "go.mod"), "module broken\nrequire (invalid\n")
 	tr := tracker(t, Config{Workspace: r, WorkFile: "off"})
-	if _, err := tr.Scan(context.Background()); err == nil {
-		t.Fatal("invalid go.mod accepted")
+	if _, err := tr.Scan(context.Background()); err != nil {
+		t.Fatalf("raw go.mod bytes rejected: %v", err)
 	}
 	write(t, filepath.Join(r, "go.mod"), "module example.com/fixed\n\ngo 1.25.0\n")
 	scan(t, tr)
@@ -152,7 +152,7 @@ func TestInvalidDependencyAndSafeScanBoundaries(t *testing.T) {
 		t.Fatal("filesystem root accepted")
 	}
 	write(t, filepath.Join(r, "go.work"), "go 1.25.0\nuse /\n")
-	tr = tracker(t, Config{Workspace: r})
+	tr = tracker(t, Config{Workspace: r, GoDiscovery: true})
 	if _, err := tr.Scan(context.Background()); err == nil {
 		t.Fatal("unbounded go.work root accepted")
 	}

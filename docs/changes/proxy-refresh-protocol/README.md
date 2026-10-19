@@ -1,6 +1,6 @@
 # Proxy 独立刷新与 MCP 协议兼容改造方案
 
-状态：**Proposed**。日期：2026-10-19。此次提交只包含技术方案和文档入口，运行时代码与新验收尚未实现。
+状态：**Implemented，最终平台结果以对应提交 CI 为准**。日期：2026-10-19。运行时代码、独立后端、协议恢复及迁移已实施；实际断言和测量见 [实施与验证记录](implementation-results.md)。
 
 调研基线：main 的 [32cbd9fe11108f9f897ae1ef1cabbc94b10d1b51](https://github.com/fredgnr/gopls-mcp-proxy/commit/32cbd9fe11108f9f897ae1ef1cabbc94b10d1b51)，tree 为 c011e038126bc7487716ba83b1f3dcf30d6a74ed。
 
@@ -47,6 +47,6 @@
 
 ## 文档与实现状态
 
-本目录是后续实现的目标契约。当前实现及历史验证分别保留在 [首版设计](../../design.md) 和 [现有验证范围](../../validation.md)。实施完成后，再按 P5 同步运行文档、移除被替代的旧断言，并填写对应提交的实际证据。
+本目录保留实现目标及原始验收目录。当前实现见 [运行设计](../../design.md)、[验证范围](../../validation.md) 和 [实施记录](implementation-results.md)。旧工具镜像和“普通内容不换代”的断言已移除。
 
-所有实施任务和新验收项当前均为 pending。文档评审、Markdown 检查或本次 PR 的既有 CI 结果，不构成新运行时行为的验收通过。
+P0–P5 的产物与实际验证入口见实施记录。完整 VAL 场景目录与实际子断言分开记录；早期文档 CI 不充当新运行时验收。

@@ -1,69 +1,73 @@
-// Package backend owns a single gopls process and its independent MCP client session.
+// Package backend manages raw child-process stdio. It has no MCP or business
+// protocol knowledge: the caller owns framing, handshakes, and recovery.
 package backend
 
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
-	"maps"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/fredgnr/gopls-mcp-proxy/internal/buildinfo"
-	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const ProtocolVersion = "2025-11-25"
-
-type Session interface {
-	Tools() []*mcp.Tool
-	Instructions() string
-	Call(context.Context, *mcp.CallToolParams, func(*mcp.ProgressNotificationParams)) (*mcp.CallToolResult, error)
-	Done() <-chan struct{}
-	Close()
-}
-
-type Factory func(context.Context, []string) (Session, error)
-
 type Config struct {
-	Executable string
-	Workspace  string
-	// Args is normally ["mcp"]. Tests use a standalone MCP fixture executable.
+	Executable      string
 	Args            []string
+	Workspace       string
+	Env             []string
 	ShutdownTimeout time.Duration
+	CleanupTimeout  time.Duration
 	Logger          *slog.Logger
 	Stderr          io.Writer
 }
 
-// NewFactory resolves and fingerprints the executable once for the proxy lifetime.
-func NewFactory(cfg Config) (Factory, error) {
-	path, err := exec.LookPath(cfg.Executable)
+// Factory fixes the command locator, arguments, cwd and environment for one
+// proxy lifetime. A locator may be a symlink; its target is deliberately not
+// resolved here so an upgrade is observed at the next ordinary spawn.
+type Factory struct {
+	cfg      Config
+	mu       sync.Mutex
+	previous *Process
+}
+
+var bootSequence atomic.Uint64
+
+func NewFactory(cfg Config) (*Factory, error) {
+	if cfg.Env == nil {
+		cfg.Env = os.Environ()
+	}
+	cfg.Env = slices.Clone(cfg.Env)
+	cfg.Args = slices.Clone(cfg.Args)
+	if cfg.Workspace == "" {
+		var err error
+		cfg.Workspace, err = os.Getwd()
+		if err != nil {
+			return nil, err
+		}
+	}
+	var err error
+	cfg.Workspace, err = filepath.Abs(cfg.Workspace)
 	if err != nil {
 		return nil, err
 	}
-	path, err = filepath.Abs(path)
+	cfg.Executable, err = resolveExecutable(cfg.Executable, cfg.Env, cfg.Workspace)
 	if err != nil {
 		return nil, err
-	}
-	original, err := executableDigest(path)
-	if err != nil {
-		return nil, err
-	}
-	cfg.Executable = path
-	if cfg.Args == nil {
-		cfg.Args = []string{"mcp"}
 	}
 	if cfg.ShutdownTimeout <= 0 {
 		cfg.ShutdownTimeout = 2 * time.Second
+	}
+	if cfg.CleanupTimeout <= 0 {
+		cfg.CleanupTimeout = 6 * time.Second
 	}
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
@@ -71,261 +75,226 @@ func NewFactory(cfg Config) (Factory, error) {
 	if cfg.Stderr == nil {
 		cfg.Stderr = os.Stderr
 	}
-	return func(ctx context.Context, roots []string) (Session, error) {
-		digest, err := executableDigest(path)
-		if err != nil {
-			return nil, err
-		}
-		if digest != original {
-			return nil, fmt.Errorf("gopls executable changed; restart the proxy session")
-		}
-		return start(ctx, cfg, roots)
-	}, nil
+	return &Factory{cfg: cfg}, nil
 }
 
-func executableDigest(path string) ([32]byte, error) {
-	f, err := os.Open(path)
+func resolveExecutable(name string, env []string, cwd string) (string, error) {
+	if name == "" {
+		return "", fmt.Errorf("backend program is required after --")
+	}
+	check := func(path string) (string, error) {
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(cwd, path)
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			return "", err
+		}
+		if !info.Mode().IsRegular() || info.Mode()&0111 == 0 {
+			return "", fmt.Errorf("backend program %q is not executable", path)
+		}
+		return filepath.Clean(path), nil
+	}
+	if strings.ContainsAny(name, `/\`) {
+		return check(name)
+	}
+	var path string
+	for _, entry := range env {
+		if value, ok := strings.CutPrefix(entry, "PATH="); ok {
+			path = value
+		}
+	}
+	for _, dir := range filepath.SplitList(path) {
+		if resolved, err := check(filepath.Join(dir, name)); err == nil {
+			return resolved, nil
+		}
+	}
+	return "", fmt.Errorf("resolve backend program %q: %w", name, exec.ErrNotFound)
+}
+
+// Process exposes the raw pipes and a unique ID allocated before each spawn
+// attempt, including attempts that fail and are only visible in diagnostics.
+type Process struct {
+	ID              uint64
+	Digest          [32]byte
+	Stdin           io.WriteCloser
+	Stdout          io.ReadCloser
+	Done            <-chan struct{}
+	cmd             *exec.Cmd
+	done            chan struct{}
+	once            sync.Once
+	mu              sync.Mutex
+	err             error
+	closeErr        error
+	shutdownTimeout time.Duration
+	cleanupTimeout  time.Duration
+	logger          *slog.Logger
+	cleaned         atomic.Bool
+}
+
+func (f *Factory) Start(ctx context.Context) (*Process, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	id := bootSequence.Add(1)
+	started := time.Now()
+	failed := func(err error) (*Process, error) {
+		f.cfg.Logger.Error("backend start failed", "boot_id", id, "error", err, "elapsed", time.Since(started))
+		return nil, fmt.Errorf("backend boot %d: %w", id, err)
+	}
+	if f.previous != nil && !f.previous.cleaned.Load() {
+		return failed(fmt.Errorf("previous backend boot %d has not completed cleanup", f.previous.ID))
+	}
+	if err := ctx.Err(); err != nil {
+		return failed(err)
+	}
+	digest, err := executableDigest(ctx, f.cfg.Executable)
+	if err != nil {
+		return failed(err)
+	}
+	if err := ctx.Err(); err != nil {
+		return failed(err)
+	}
+	childIn, parentIn, err := os.Pipe()
+	if err != nil {
+		return failed(err)
+	}
+	parentOut, childOut, err := os.Pipe()
+	if err != nil {
+		_ = childIn.Close()
+		_ = parentIn.Close()
+		return failed(err)
+	}
+	cmd := exec.Command(f.cfg.Executable, f.cfg.Args...)
+	cmd.Dir, cmd.Env = f.cfg.Workspace, slices.Clone(f.cfg.Env)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = childIn, childOut, f.cfg.Stderr
+	configureProcess(cmd)
+	err = cmd.Start()
+	_ = childIn.Close()
+	_ = childOut.Close()
+	if err != nil {
+		_ = parentIn.Close()
+		_ = parentOut.Close()
+		return failed(err)
+	}
+	done := make(chan struct{})
+	p := &Process{ID: id, Digest: digest, Stdin: parentIn, Stdout: parentOut, Done: done, cmd: cmd, done: done,
+		shutdownTimeout: f.cfg.ShutdownTimeout, cleanupTimeout: f.cfg.CleanupTimeout, logger: f.cfg.Logger}
+	f.previous = p
+	go func() { err := cmd.Wait(); p.mu.Lock(); p.err = err; p.mu.Unlock(); close(done) }()
+	f.cfg.Logger.Info("backend started", "boot_id", id, "pid", p.PID(), "image_sha256", fmt.Sprintf("%x", digest), "elapsed", time.Since(started))
+	if err := ctx.Err(); err != nil {
+		if cleanupErr := p.Close(); cleanupErr != nil {
+			return failed(errors.Join(err, cleanupErr))
+		}
+		return failed(err)
+	}
+	return p, nil
+}
+
+// The digest is observational: a changed image is accepted. Hashing and exec are
+// separate filesystem operations, so this is not a secure attestation.
+func executableDigest(ctx context.Context, path string) ([32]byte, error) {
+	// Recheck on every spawn: a configured symlink or executable may have been
+	// replaced since factory construction. Never hash pipes/devices/directories.
+	info, err := os.Stat(path)
+	if err != nil {
+		return [32]byte{}, err
+	}
+	if !info.Mode().IsRegular() || info.Mode()&0111 == 0 {
+		return [32]byte{}, fmt.Errorf("backend program %q is not a regular executable", path)
+	}
+	f, err := openExecutable(path)
 	if err != nil {
 		return [32]byte{}, err
 	}
 	defer f.Close()
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
+	info, err = f.Stat()
+	if err != nil {
 		return [32]byte{}, err
+	}
+	if !info.Mode().IsRegular() {
+		return [32]byte{}, fmt.Errorf("backend program %q changed to a non-regular file", path)
+	}
+	h := sha256.New()
+	buffer := make([]byte, 64<<10)
+	for {
+		if err := ctx.Err(); err != nil {
+			return [32]byte{}, err
+		}
+		n, err := f.Read(buffer)
+		if n > 0 {
+			_, _ = h.Write(buffer[:n])
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return [32]byte{}, err
+		}
 	}
 	var sum [32]byte
 	copy(sum[:], h.Sum(nil))
 	return sum, nil
 }
 
-type process struct {
-	cmd     *exec.Cmd
-	in, out *os.File
-	done    chan struct{}
-	once    sync.Once
-	timeout time.Duration
+func (p *Process) PID() int { return p.cmd.Process.Pid }
+
+// Err reports the Wait result after Done closes. An intentional signal during
+// shutdown may produce an ExitError even when resource cleanup succeeded.
+func (p *Process) Err() error { p.mu.Lock(); defer p.mu.Unlock(); return p.err }
+func (p *Process) Close() error {
+	ctx, cancel := context.WithTimeout(context.Background(), p.cleanupTimeout)
+	defer cancel()
+	return p.CloseContext(ctx)
 }
 
-func launch(cfg Config) (*process, error) {
-	childIn, parentIn, err := os.Pipe()
-	if err != nil {
-		return nil, err
-	}
-	parentOut, childOut, err := os.Pipe()
-	if err != nil {
-		childIn.Close()
-		parentIn.Close()
-		return nil, err
-	}
-	cmd := exec.Command(cfg.Executable, cfg.Args...)
-	cmd.Dir, cmd.Stdin, cmd.Stdout, cmd.Stderr = cfg.Workspace, childIn, childOut, cfg.Stderr
-	configureProcess(cmd)
-	err = cmd.Start()
-	childIn.Close()
-	childOut.Close()
-	if err != nil {
-		parentIn.Close()
-		parentOut.Close()
-		return nil, err
-	}
-	p := &process{cmd: cmd, in: parentIn, out: parentOut, done: make(chan struct{}), timeout: cfg.ShutdownTimeout}
-	go func() { _ = cmd.Wait(); close(p.done) }()
-	return p, nil
-}
-
-func (p *process) close() {
+// CloseContext closes both pipes to unblock concurrent IO, then performs
+// EOF -> TERM -> KILL -> Wait within the caller's remaining cleanup budget.
+// A failure to confirm Wait is an error; callers must not start another child.
+func (p *Process) CloseContext(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, p.cleanupTimeout)
+	defer cancel()
 	p.once.Do(func() {
-		_ = p.in.Close()
-		if !wait(p.done, p.timeout) {
-			terminateProcess(p.cmd)
-			if !wait(p.done, p.timeout) {
-				killProcess(p.cmd)
-				<-p.done
-			}
+		started := time.Now()
+		_ = p.Stdin.Close()
+		_ = p.Stdout.Close()
+		if !waitFor(p.done, ctx, p.shutdownTimeout) {
+			_ = terminateProcess(p.cmd)
+			_ = waitFor(p.done, ctx, p.shutdownTimeout)
 		}
-		// Clean up any descendant go commands that survived their gopls parent.
-		killProcess(p.cmd)
-		_ = p.out.Close()
+		// Always kill the process group, including descendants whose parent exited.
+		if err := killProcess(p.cmd); err != nil {
+			p.closeErr = fmt.Errorf("backend boot %d pid %d process-group kill failed: %w", p.ID, p.PID(), err)
+		}
+		if !waitFor(p.done, ctx, p.cleanupTimeout) {
+			cause := ctx.Err()
+			if cause == nil {
+				cause = context.DeadlineExceeded
+			}
+			p.closeErr = errors.Join(p.closeErr, fmt.Errorf("backend boot %d pid %d cleanup could not confirm Wait: %w", p.ID, p.PID(), cause))
+		}
+		if p.closeErr == nil {
+			p.cleaned.Store(true)
+		}
+		p.logger.Info("backend cleanup", "boot_id", p.ID, "pid", p.PID(), "elapsed", time.Since(started), "error", p.closeErr)
 	})
+	return p.closeErr
 }
 
-func wait(done <-chan struct{}, timeout time.Duration) bool {
+func waitFor(done <-chan struct{}, ctx context.Context, timeout time.Duration) bool {
+	select {
+	case <-done:
+		return true
+	default:
+	}
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	select {
 	case <-done:
 		return true
+	case <-ctx.Done():
+		return false
 	case <-timer.C:
 		return false
 	}
-}
-
-type session struct {
-	proc         *process
-	client       *mcp.ClientSession
-	tools        []*mcp.Tool
-	instructions string
-	done         chan struct{}
-	sequence     atomic.Uint64
-	mu           sync.Mutex
-	progress     map[string]chan *mcp.ProgressNotificationParams
-	once         sync.Once
-}
-
-func start(ctx context.Context, cfg Config, roots []string) (Session, error) {
-	p, err := launch(cfg)
-	if err != nil {
-		return nil, fmt.Errorf("start gopls: %w", err)
-	}
-	s := &session{proc: p, done: make(chan struct{}), progress: map[string]chan *mcp.ProgressNotificationParams{}}
-	// Bound initialization even if a backend never answers the handshake.
-	stop := context.AfterFunc(ctx, p.close)
-	defer stop()
-	c := mcp.NewClient(&mcp.Implementation{Name: "gopls-mcp-proxy", Version: buildinfo.Version}, &mcp.ClientOptions{
-		Logger:         cfg.Logger,
-		Capabilities:   &mcp.ClientCapabilities{RootsV2: &mcp.RootCapabilities{}},
-		MultiRoundTrip: &mcp.MultiRoundTripOptions{Disabled: true},
-		ProgressNotificationHandler: func(_ context.Context, req *mcp.ProgressNotificationClientRequest) {
-			token, ok := req.Params.ProgressToken.(string)
-			if !ok {
-				return
-			}
-			s.mu.Lock()
-			ch := s.progress[token]
-			s.mu.Unlock()
-			if ch != nil {
-				copy := *req.Params
-				select {
-				case ch <- &copy:
-				default:
-				}
-			}
-		},
-	})
-	for _, root := range roots {
-		c.AddRoots(&mcp.Root{URI: FileURI(root), Name: filepath.Base(root)})
-	}
-	cs, err := c.Connect(ctx, &mcp.IOTransport{Reader: p.out, Writer: p.in}, &mcp.ClientSessionOptions{ProtocolVersion: ProtocolVersion})
-	if err != nil {
-		p.close()
-		return nil, fmt.Errorf("initialize gopls MCP: %w", err)
-	}
-	s.client = cs
-	go func() { _ = cs.Wait(); close(s.done) }()
-	s.instructions = cs.InitializeResult().Instructions
-	// Tool lists can be paginated. Treat a repeated cursor as a backend protocol error.
-	cursors := map[string]bool{}
-	cursor := ""
-	for {
-		result, err := cs.ListTools(ctx, &mcp.ListToolsParams{Cursor: cursor})
-		if err != nil {
-			s.Close()
-			return nil, fmt.Errorf("list gopls tools: %w", err)
-		}
-		s.tools = append(s.tools, result.Tools...)
-		cursor = result.NextCursor
-		if cursor == "" {
-			break
-		}
-		if cursors[cursor] {
-			s.Close()
-			return nil, fmt.Errorf("gopls tools/list repeated a cursor")
-		}
-		cursors[cursor] = true
-	}
-	if len(s.tools) == 0 {
-		s.Close()
-		return nil, fmt.Errorf("gopls returned no MCP tools")
-	}
-	if _, err := ToolDigest(s.tools); err != nil {
-		s.Close()
-		return nil, err
-	}
-	if err := ctx.Err(); err != nil {
-		s.Close()
-		return nil, err
-	}
-	return s, nil
-}
-
-func FileURI(path string) string {
-	path = filepath.ToSlash(path)
-	if len(path) > 1 && path[1] == ':' {
-		path = "/" + path
-	}
-	return (&url.URL{Scheme: "file", Path: path}).String()
-}
-
-func (s *session) Tools() []*mcp.Tool    { return s.tools }
-func (s *session) Instructions() string  { return s.instructions }
-func (s *session) Done() <-chan struct{} { return s.done }
-func (s *session) Close()                { s.once.Do(func() { s.proc.close(); _ = s.client.Close() }) }
-
-func (s *session) Call(ctx context.Context, params *mcp.CallToolParams, notify func(*mcp.ProgressNotificationParams)) (*mcp.CallToolResult, error) {
-	p := *params
-	p.Meta = maps.Clone(params.Meta)
-	original := params.GetProgressToken()
-	if original != nil && notify != nil {
-		// Never reuse an upstream token: clients can reuse tokens across requests.
-		token := fmt.Sprintf("proxy-%d", s.sequence.Add(1))
-		p.SetProgressToken(token)
-		ch := make(chan *mcp.ProgressNotificationParams, 32)
-		s.mu.Lock()
-		s.progress[token] = ch
-		s.mu.Unlock()
-		progressCtx, cancel := context.WithCancel(ctx)
-		defer cancel()
-		defer func() { s.mu.Lock(); delete(s.progress, token); s.mu.Unlock() }()
-		go func() {
-			for {
-				select {
-				case <-progressCtx.Done():
-					return
-				case update := <-ch:
-					if progressCtx.Err() == nil {
-						update.ProgressToken = original
-						notify(update)
-					}
-				}
-			}
-		}()
-	}
-	return s.client.CallTool(ctx, &p)
-}
-
-// ToolDigest includes full tool definitions, not just names, in deterministic order.
-func ToolDigest(tools []*mcp.Tool) ([32]byte, error) {
-	ordered := slices.Clone(tools)
-	for _, tool := range ordered {
-		if tool == nil || tool.Name == "" || tool.InputSchema == nil {
-			return [32]byte{}, fmt.Errorf("invalid backend tool definition")
-		}
-	}
-	slices.SortFunc(ordered, func(a, b *mcp.Tool) int {
-		if a.Name < b.Name {
-			return -1
-		}
-		if a.Name > b.Name {
-			return 1
-		}
-		return 0
-	})
-	for i, t := range ordered {
-		if i > 0 && t.Name == ordered[i-1].Name {
-			return [32]byte{}, fmt.Errorf("duplicate backend tool: %s", t.Name)
-		}
-		b, err := json.Marshal(t.InputSchema)
-		if err != nil {
-			return [32]byte{}, err
-		}
-		var schema map[string]any
-		if json.Unmarshal(b, &schema) != nil || schema["type"] != "object" {
-			return [32]byte{}, fmt.Errorf("tool %s has a non-object input schema", t.Name)
-		}
-	}
-	b, err := json.Marshal(ordered)
-	if err != nil {
-		return [32]byte{}, err
-	}
-	return sha256.Sum256(b), nil
 }

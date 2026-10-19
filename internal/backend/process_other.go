@@ -2,8 +2,20 @@
 
 package backend
 
-import "os/exec"
+import (
+	"errors"
+	"os"
+	"os/exec"
+)
 
-func configureProcess(cmd *exec.Cmd) {}
-func terminateProcess(cmd *exec.Cmd) { _ = cmd.Process.Kill() }
-func killProcess(cmd *exec.Cmd)      { _ = cmd.Process.Kill() }
+func openExecutable(path string) (*os.File, error) { return os.Open(path) }
+
+func configureProcess(cmd *exec.Cmd)       {}
+func terminateProcess(cmd *exec.Cmd) error { return killProcess(cmd) }
+func killProcess(cmd *exec.Cmd) error {
+	err := cmd.Process.Kill()
+	if errors.Is(err, os.ErrProcessDone) {
+		return nil
+	}
+	return err
+}
