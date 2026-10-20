@@ -24,15 +24,16 @@ const maxRecoverySubscriptions = 4096
 // Its owner serializes Observe calls. Recover operates on a Clone while that
 // owner continues routing the candidate's legitimate reverse requests.
 type Recovery struct {
-	revision    string
-	initRequest []byte
-	initResult  []byte
-	initialized []byte
-	logLevel    []byte
-	subscribed  map[string][]byte
-	directories map[string]*directoryView
-	blocked     string
-	sequence    uint64
+	revision       string
+	initRequest    []byte
+	initResult     []byte
+	initDiagnostic RecoveryDiagnostic
+	initialized    []byte
+	logLevel       []byte
+	subscribed     map[string][]byte
+	directories    map[string]*directoryView
+	blocked        string
+	sequence       uint64
 }
 
 type directoryView struct {
@@ -148,8 +149,9 @@ func (r *Recovery) ObserveResponse(request, response wire.Message) {
 		} else {
 			r.revision = version
 		}
-		if !replayableInitialize(request.Raw, response.Raw) {
-			r.blocked = "unknown initialization extension has no recovery rule"
+		r.initDiagnostic = recoveryInitializeDiagnostic(request.Raw, response.Raw)
+		if r.initDiagnostic.Reason != "" {
+			r.blocked = r.initDiagnostic.String()
 		}
 	case "logging/setLevel":
 		if !replayableSetting(request.Raw, "level") {
@@ -243,8 +245,8 @@ func (r *Recovery) Recover(ctx context.Context, exchange func(context.Context, [
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if r.blocked != "" {
-		return fmt.Errorf("%w: %s", ErrReconnectRequired, r.blocked)
+	if err := r.Preflight(); err != nil {
+		return err
 	}
 	if r.revision == "2026-07-28" && len(r.initRequest) == 0 {
 		// Modern directory notifications require a live notification subscription,
@@ -252,18 +254,12 @@ func (r *Recovery) Recover(ctx context.Context, exchange func(context.Context, [
 		// subscription may be synthesized here. Directory comparison retains the
 		// metadata of each actual delivered enumeration; it is not a default
 		// identity or capability snapshot for future client requests.
-		if len(r.logLevel) != 0 || len(r.subscribed) != 0 {
-			return fmt.Errorf("%w: modern observed state requires a new frontend session", ErrReconnectRequired)
-		}
 		for _, method := range sortedRecoveryKeys(r.directories) {
 			if err := r.compareDirectory(ctx, method, exchange); err != nil {
 				return err
 			}
 		}
 		return nil
-	}
-	if len(r.initRequest) == 0 || !legacyRecoveryRevision(r.revision) || len(r.initialized) == 0 {
-		return fmt.Errorf("%w: no completed, supported initialization to restore", ErrReconnectRequired)
 	}
 	request, err := wire.Replace(r.initRequest, mustRecoveryJSON(r.revision), "params", "protocolVersion")
 	if err != nil {
@@ -393,92 +389,12 @@ func legacyRecoveryRevision(revision string) bool {
 	return false
 }
 
-func replayableInitialize(request, response []byte) bool {
-	if !recoveryOnlyFields(request, "jsonrpc", "id", "method", "params") {
-		return false
-	}
-	if !recoveryOnlyFields(response, "jsonrpc", "id", "result") {
-		return false
-	}
-	result, ok := wire.Get(response, "result")
-	if !ok || !recoveryOnlyFields(result, "protocolVersion", "capabilities", "serverInfo", "instructions", "_meta") || !emptyRecoveryMetadata(result) {
-		return false
-	}
-	params, ok := wire.Get(request, "params")
-	if !ok || !recoveryOnlyFields(params, "protocolVersion", "clientInfo", "capabilities", "_meta") || !emptyRecoveryMetadata(params) {
-		return false
-	}
-	revision, ok := recoveryString(response, "result", "protocolVersion")
-	if !ok || !legacyRecoveryRevision(revision) {
-		return false
-	}
-	for _, side := range []struct {
-		raw  []byte
-		path []string
-	}{{request, []string{"params", "clientInfo"}}, {response, []string{"result", "serverInfo"}}} {
-		info, exists := wire.Get(side.raw, side.path...)
-		if exists && !recoveryImplementationInfo(info) {
-			return false
-		}
-	}
-	for _, path := range [][]string{{"params", "capabilities"}, {"result", "capabilities"}} {
-		raw := request
-		if path[0] == "result" {
-			raw = response
-		}
-		capabilities, exists := wire.Get(raw, path...)
-		if !exists {
-			continue
-		}
-		if !recoveryCapabilityShape(revision, path[0] == "result").accepts(capabilities) {
-			return false
-		}
-	}
-	return true
-}
-
-func recoveryImplementationInfo(raw []byte) bool {
-	if !recoveryOnlyFields(raw, "name", "version", "title", "description", "websiteUrl", "icons") {
-		return false
-	}
-	if iconsRaw, exists := wire.Get(raw, "icons"); exists {
-		var icons []json.RawMessage
-		if json.Unmarshal(iconsRaw, &icons) != nil || bytes.Equal(bytes.TrimSpace(iconsRaw), []byte("null")) {
-			return false
-		}
-		for _, icon := range icons {
-			if !recoveryOnlyFields(icon, "src", "mimeType", "sizes", "theme") {
-				return false
-			}
-		}
-	}
-	return true
-}
-
 // These are recovery allowlists, not validators of normal traffic. Unknown
 // capabilities remain byte-preserving on the initial exchange, but cannot be
 // presumed safe to replay as session state. Known opaque capability objects
 // have no defined nested fields and therefore require an empty object here.
 // Shapes follow the versioned official schema.ts Client/ServerCapabilities.
 type recoveryCapabilityFields map[string]recoveryCapabilityFields
-
-func (shape recoveryCapabilityFields) accepts(raw []byte) bool {
-	if shape == nil { // The only primitive capability members are booleans.
-		trimmed := bytes.TrimSpace(raw)
-		return bytes.Equal(trimmed, []byte("true")) || bytes.Equal(trimmed, []byte("false"))
-	}
-	var object map[string]json.RawMessage
-	if json.Unmarshal(raw, &object) != nil || object == nil {
-		return false
-	}
-	for key, value := range object {
-		child, exists := shape[key]
-		if !exists || !child.accepts(value) {
-			return false
-		}
-	}
-	return true
-}
 
 func recoveryCapabilityShape(revision string, server bool) recoveryCapabilityFields {
 	empty := recoveryCapabilityFields{}
@@ -495,7 +411,10 @@ func recoveryCapabilityShape(revision string, server bool) recoveryCapabilityFie
 		shape["roots"] = recoveryCapabilityFields{"listChanged": nil}
 		shape["sampling"] = empty
 		if revision == "2025-06-18" || revision == "2025-11-25" {
-			shape["elicitation"] = empty
+			// Known static form/url declarations are also sent with June
+			// negotiation (for example by Codex). Replaying them verbatim
+			// does not upgrade the session or restore an elicitation call.
+			shape["elicitation"] = recoveryCapabilityFields{"form": empty, "url": empty}
 		}
 	}
 	if revision == "2025-11-25" {
@@ -504,7 +423,6 @@ func recoveryCapabilityShape(revision string, server bool) recoveryCapabilityFie
 			requests = recoveryCapabilityFields{"tools": {"call": empty}}
 		} else {
 			shape["sampling"] = recoveryCapabilityFields{"context": empty, "tools": empty}
-			shape["elicitation"] = recoveryCapabilityFields{"form": empty, "url": empty}
 			requests = recoveryCapabilityFields{"sampling": {"createMessage": empty}, "elicitation": {"create": empty}}
 		}
 		shape["tasks"] = recoveryCapabilityFields{"list": empty, "cancel": empty, "requests": requests}

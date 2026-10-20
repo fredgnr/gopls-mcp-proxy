@@ -58,14 +58,14 @@ go build ./cmd/gopls-mcp-proxy
 go test -race -v ./integration -run '^TestRaw' -count=1
 
 # 真实互通；需要支持 MCP 的 gopls，并允许下载测试依赖。
-GOPLS_INTEGRATION=1 GOPLS_BIN="$(command -v gopls)" \
+GOPLS_INTEGRATION=1 GOPLS_EXPECTED_VERSION=v0.24.0 GOPLS_BIN="$(command -v gopls)" \
   go test -v ./integration -run '^TestRealGopls' -count=1
 
 # 内容扫描基准，不包括真实后端启动成本。
 go test ./internal/workspace -run '^$' -bench BenchmarkContentScan -benchmem
 ```
 
-CI 保留 Linux/macOS、最低 Go 1.25、Go 1.27.2、固定 gopls v0.24.0、race/vet/build 和四平台打包。组件测试、raw 合同测试、真实互通分为独立步骤；Linux 最低版本也必须执行 raw 用例。测试将 `PROXY_TEST_EVIDENCE_DIR` 放在 runner 临时目录，保留 fixture 的 boot/receipt/execution/raw 消息事件及代理 stderr，不把证据写入被监测根。JSON 结果和这些轨迹一起作为 `test-results-<os>-go-<version>` artifact 保留 14 天，构建包作为 `release-dist` 保留 14 天。
+CI 保留 Linux/macOS、最低 Go 1.25、Go 1.27.2、固定 gopls v0.23.0/v0.24.0、race/vet/build 和四平台打包。组件测试、raw 合同测试、真实互通分为独立步骤；Linux 最低版本也必须执行 raw 用例。测试将 `PROXY_TEST_EVIDENCE_DIR` 放在 runner 临时目录，保留 fixture 的 boot/receipt/execution/raw 消息事件及代理 stderr，不把证据写入被监测根。JSON 结果和这些轨迹一起作为 `test-results-<os>-go-<version>-gopls-<version>` artifact 保留 14 天，构建包作为 `release-dist` 保留 14 天。
 
 CI 使用 `contents: read`，checkout 为 `persist-credentials: false`，不使用 `pull_request_target`。本次验证配置不增加 tag、Release 或发布权限。
 
@@ -91,6 +91,21 @@ CI 使用 `contents: read`，checkout 为 `persist-credentials: false`，不使�
 
 `integration/per_call_test.go` 用只在启动时读取文件的夹具，覆盖无文件变化也换进程、监测范围外和排除文件的更新、现代首调用、串行排队与反向响应/进度/控制通知、取消、不重放和 batch 拒绝。`internal/proxy/per_call_test.go` 补充配置校验、响应交付前不换代、等待期间继续轮询、取消队首不转让新进程及 typed ID 边界。
 
-`TestRealGoplsPerCallFreshProcessAndFileChanges` 使用固定 v0.24.0 的 sibling gopls，关闭 watcher 并将轮询设为 1h；七次 `go_search` 分别验证不变输入、新增、重命名、同 mtime 内容修改、旧符号消失与删除，每次记录新 boot/PID/generation，并核对原生工具目录保持不变。该用例验证实际 gopls 互通，不能替代上述独立夹具的刷新因果证据，也不证明真实 Codex 客户端验收。
+`TestRealGoplsPerCallFreshProcessAndFileChanges` 使用由 `GOPLS_EXPECTED_VERSION` 指定的固定版本 sibling gopls，关闭 watcher 并将轮询设为 1h；七次 `go_search` 分别验证不变输入、新增、重命名、同 mtime 内容修改、旧符号消失与删除，每次记录新 boot/PID/generation，并核对原生工具目录保持不变。该用例验证实际 gopls 互通，不能替代上述独立夹具的刷新因果证据，也不证明真实 Codex 客户端验收。
 
 `scripts/check-launcher-tests.py` 同时检查上述三个 `per_call*_test.go` 文件中的测试：对应组件、raw 和真实后端步骤必须实际执行并通过，缺失、失败或 skip 均拒绝通过。该模式仍保留原有输入校验，不承诺未保存编辑、并发写入的一致快照或跨进程业务 handle 的迁移。
+
+
+## Codex June 初始化恢复修复
+
+Codex `0.163.0` 可发送 `2025-06-18` 与空的 `elicitation.form/url`。原恢复白名单在初次成功握手后把此组合标记为不可恢复，首次刷新随即关闭连接。现允许 June 与 November 原样恢复这两个已知静态声明；实际协商版本、身份、服务端能力和目录快照仍保持原有一致性要求，未知状态与已派发业务仍不重放。
+
+| 覆盖 | 位置与断言 |
+|---|---|
+| 静态声明与协商 | `recovery_test.go`、`recovery_diagnostic_test.go`：June 四种形状、November → June、客户端身份与能力原样保留、无客户端名称特判 |
+| 拒绝与诊断 | `recovery_test.go`、`recovery_diagnostic_test.go`：未知键、非空对象、null/布尔/数组、metadata、确定性字段路径与值脱敏 |
+| 有界失败交付 | `recovery_supervisor_test.go`：启动前拒绝、未派发错误、typed ID/batch/取消、输出确认与超时、关闭期间不派发 |
+| 独立后端 | `TestRawCodexRecoveryAcrossRefreshModes`：同前端连续调用、两种刷新触发、初始化保留及旧进程退出 |
+| 真实后端 | `TestRealGoplsCodexRecovery`：两个版本 × 两种刷新模式；符号新增、重命名、同 mtime 修改及删除，旧 PID 退出 |
+
+`integration/testdata/codex-0.163.0-initialize.json` 是根据上游源码和报告复现构造的参数 fixture，并非原始故障连接的抓包。真实 Codex 客户端及其可能携带的其他扩展仍需在用户环境验收；CI 元数据继续标记 `real_codex_status` 为 pending。

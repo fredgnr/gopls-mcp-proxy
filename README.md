@@ -142,6 +142,10 @@ gopls-mcp-proxy \
 
 初次连接直接转发真实客户端握手，不强制 `tools/list` 预热。刷新时比较版本、能力、身份、instructions 等初始化信息；已观察目录若支持合法变更通知，则发送失效通知，否则需要完整、可比较且相同的分页快照。目录不完整、未知扩展、恢复失败或约定变化会返回 `protocol_restart_required` 并结束 stdio，客户端需重新建立连接。不会继续使用已知陈旧后端。
 
+`2025-06-18` 和 `2025-11-25` 均允许恢复空的 `elicitation`，以及其中值为空对象的 `form`、`url` 声明，支持 Codex `0.163.0` 的 June 初始化组合。代理保留客户端身份与能力内容，恢复时使用实际协商版本；这不升级协议，也不恢复正在进行的 elicitation 交互。未知模式、非空模式对象和错误类型仍不能恢复。
+
+首次成功握手会在 stderr 记录初始化声明的恢复资格，包含 `requested_version`、`negotiated_version`、`recoverable`；拒绝时另有 `side`、`path`、`reason`、`actual_type`，不记录完整初始化报文或被拒绝的字段值。恢复资格仅说明初始化声明可重建，后续状态与候选后端仍需通过一致性检查。已知不可恢复状态会在启动替代后端前拒绝。
+
 分页 cursor、task ID、业务 handle 和 MRTR `requestState` 原样传递，但不保证跨进程有效。代理不重放创建这些状态的业务调用，也不把旧版反向请求翻译为现代 MRTR。
 
 ## 一致性与错误
@@ -149,6 +153,8 @@ gopls-mcp-proxy \
 文件事件、内容指纹和独立 dirty epoch 控制后端发布。每次派发和交付有限请求结果前进行内容检查，启动候选前后也复核输入；启动期间变化的候选不能成为新代次。刷新暂停新普通请求，已派发操作需要的反向回复、取消等控制消息继续有界转发。
 
 已进入写入阶段的业务请求一律不自动重放，包括部分写入、崩溃、超时和旧代次结果。代理错误是 JSON-RPC 错误（应用 code `1000`），不是伪造的工具 `isError` 结果。错误 `data` 含 `reason`、`generation`、`requestDispatched`、`backendResponseReceived`、`sideEffects` 和 `automaticReplay: false`。上游错误保持原样。
+
+恢复失败时，尚未派发的排队请求会收到 `protocol_restart_required`，其中 `requestDispatched: false`；若初始化声明被拒绝，`data.recovery` 同时提供字段路径与原因。代理最多等待 `cleanup-timeout` 与 `request-timeout` 中较短的时间写出这些错误，再关闭连接并清理候选后端。输出阻塞或超出预算时不保证错误一定送达。
 
 这尤其影响写工具：工具可能已经修改文件，但结果因跨越刷新边界而被拒绝。`requestDispatched: true` 表示副作用不确定，使用方需要核对实际状态再决定下一步，不能把错误当作未执行证明。
 
@@ -178,7 +184,7 @@ gopls-mcp-proxy \
 | `--retry-min` / `--retry-max` | `1s` / `30s` | 有上限的恢复退避 |
 | `--help` / `--version` | — | 输出代理帮助或版本后退出 |
 
-确认建立的现代长期订阅不使用普通请求期限，也不阻塞 drain。通知不能返回请求错误；无法在预算内转发时结束连接，不静默丢弃。清理按关闭 stdin、TERM、KILL、Wait 执行，覆盖 Unix 进程组；未确认完成清理时不启动下一后端。默认故障收敛上限是正常恢复 60s 加最后清理最多 6s，不是保证 60s 内一定恢复服务。
+确认建立的现代长期订阅不使用普通请求期限，也不阻塞 drain。通知不能返回请求错误；无法在预算内转发时结束连接，不静默丢弃。清理按关闭 stdin、TERM、KILL、Wait 执行，覆盖 Unix 进程组；未确认完成清理时不启动下一后端。默认正常恢复预算为 60s，最后清理最多 6s；恢复拒绝的错误交付分支还可能增加最多 6s 的输出等待。这些预算不保证一定恢复服务。
 
 ## 开发与验证
 
@@ -191,11 +197,13 @@ go build ./cmd/gopls-mcp-proxy
 go test -race -v ./integration -run '^TestRaw' -count=1
 
 # 真实 gopls 互通：联网下载测试依赖。
-GOPLS_INTEGRATION=1 GOPLS_BIN="$(command -v gopls)" \
+GOPLS_INTEGRATION=1 GOPLS_EXPECTED_VERSION=v0.24.0 GOPLS_BIN="$(command -v gopls)" \
   go test -v ./integration -run '^TestRealGopls' -count=1
 ```
 
 独立后端只在启动时读取一次输入，用同 PID 的负向对照证明它不会自行刷新，再验证相同代理进程/前端连接内的后端换代。真实 gopls 测试执行 protobuf `v1.34.2 → v1.35.2 → v1.36.6`，并要求内容编辑也由代理重建。
+
+真实后端矩阵固定覆盖 gopls `v0.23.0` 与 `v0.24.0`。本地测试前将 `GOPLS_EXPECTED_VERSION` 设为所安装的其中一个版本。Codex 初始化 fixture 根据上游实现与故障复现重建，覆盖两种刷新模式及符号增删改；它不代替用户实际 Codex 连接的最终验收。
 
 CI 分别执行组件 race 测试、必跑 raw 协议/刷新测试、真实 gopls 互通和二进制构建，保存 JSON 测试日志。Linux/macOS 及最低 Go 版本矩阵以当前提交的 Actions 结果为准；设计用例尚未覆盖的组合不会因某个组件测试通过就被记为通过。详见[验证范围](docs/validation.md)和[实现设计](docs/design.md)。
 

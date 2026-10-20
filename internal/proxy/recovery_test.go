@@ -316,7 +316,15 @@ func TestRecoveryCapabilityShapesAreRevisionSpecificAndRecursive(t *testing.T) {
 		{"march-completion", "2025-03-26", `{"sampling":{}}`, `{"completions":{}}`, true},
 		{"march-unknown-elicitation", "2025-03-26", `{"elicitation":{}}`, `{}`, false},
 		{"june-elicitation", "2025-06-18", `{"elicitation":{}}`, `{"completions":{}}`, true},
-		{"june-unknown-elicitation-url", "2025-06-18", `{"elicitation":{"url":{}}}`, `{}`, false},
+		{"june-form", "2025-06-18", `{"elicitation":{"form":{}}}`, `{}`, true},
+		{"june-url", "2025-06-18", `{"elicitation":{"url":{}}}`, `{}`, true},
+		{"june-form-url", "2025-06-18", `{"elicitation":{"form":{},"url":{}}}`, `{}`, true},
+		{"june-unknown-mode", "2025-06-18", `{"elicitation":{"unknownMode":{}}}`, `{}`, false},
+		{"june-nonempty-form", "2025-06-18", `{"elicitation":{"form":{"unknown":true}}}`, `{}`, false},
+		{"june-nonempty-url", "2025-06-18", `{"elicitation":{"url":{"sessionToken":"opaque"}}}`, `{}`, false},
+		{"june-null-form", "2025-06-18", `{"elicitation":{"form":null}}`, `{}`, false},
+		{"june-boolean-url", "2025-06-18", `{"elicitation":{"url":true}}`, `{}`, false},
+		{"june-array-url", "2025-06-18", `{"elicitation":{"url":[]}}`, `{}`, false},
 		{"june-unknown-tasks", "2025-06-18", `{}`, `{"tasks":{}}`, false},
 		{"november-full-known", "2025-11-25", `{"roots":{"listChanged":false},"sampling":{"context":{},"tools":{}},"elicitation":{"form":{},"url":{}},"tasks":{"list":{},"cancel":{},"requests":{"sampling":{"createMessage":{}},"elicitation":{"create":{}}}}}`, `{"logging":{},"completions":{},"tools":{"listChanged":true},"tasks":{"list":{},"cancel":{},"requests":{"tools":{"call":{}}}}}`, true},
 		{"unknown-tool-session", "2025-11-25", `{}`, `{"tools":{"vendorSessionState":"once"}}`, false},
@@ -331,7 +339,7 @@ func TestRecoveryCapabilityShapesAreRevisionSpecificAndRecursive(t *testing.T) {
 			request := []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":%q,"clientInfo":{"name":"client","version":"1"},"capabilities":%s}}`, test.revision, test.client))
 			response := []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":%q,"serverInfo":{"name":"server","version":"1"},"capabilities":%s}}`, test.revision, test.server))
 			originalRequest, originalResponse := bytes.Clone(request), bytes.Clone(response)
-			if got := replayableInitialize(request, response); got != test.accepted {
+			if got := recoveryInitializeDiagnostic(request, response).Reason == ""; got != test.accepted {
 				t.Fatalf("replayable=%v, want %v", got, test.accepted)
 			}
 			if !bytes.Equal(request, originalRequest) || !bytes.Equal(response, originalResponse) {

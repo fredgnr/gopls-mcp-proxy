@@ -16,6 +16,20 @@ import (
 // The independent fixture establishes restart causation. This test additionally
 // verifies native gopls results and session recovery across per-call restarts.
 func TestRealGoplsPerCallFreshProcessAndFileChanges(t *testing.T) {
+	testRealGoplsFileChanges(t, "per-call", `{"protocolVersion":"2025-11-25","clientInfo":{"name":"per-call-acceptance","version":"1"},"capabilities":{"roots":{"listChanged":true}}}`)
+}
+
+// Run the incident's known client shape through both refresh triggers. Native
+// symbol results prove additions, renames, edits and deletions become visible.
+func TestRealGoplsCodexRecovery(t *testing.T) {
+	for _, mode := range []string{"per-call", "on-change"} {
+		t.Run(mode, func(t *testing.T) {
+			testRealGoplsFileChanges(t, mode, codexInitializeParams)
+		})
+	}
+}
+
+func testRealGoplsFileChanges(t *testing.T, mode, initializeParams string) {
 	if os.Getenv("GOPLS_INTEGRATION") != "1" {
 		t.Skip("set GOPLS_INTEGRATION=1; dedicated interoperability CI must enable this test")
 	}
@@ -30,9 +44,10 @@ func TestRealGoplsPerCallFreshProcessAndFileChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	version, err := exec.CommandContext(ctx, gopls, "version").CombinedOutput()
-	if err != nil || strings.TrimSpace(string(version)) != "golang.org/x/tools/gopls v0.24.0" {
-		t.Fatalf("per-call acceptance requires pinned gopls v0.24.0: %v: %s", err, version)
+	if err != nil {
+		t.Fatalf("gopls version: %v: %s", err, version)
 	}
+	requireGoplsVersion(t, version)
 	t.Logf("%s", bytes.TrimSpace(version))
 	root := t.TempDir()
 	archiveEvidence(t, root)
@@ -62,7 +77,7 @@ func TestRealGoplsPerCallFreshProcessAndFileChanges(t *testing.T) {
 	copyExecutable(t, gopls, backendPath)
 	// Suppress asynchronous watcher/poll replacements so unchanged calls must
 	// prove the mode itself starts a fresh process. Request scans stay enabled.
-	cmd := exec.CommandContext(ctx, proxyPath, "--refresh-mode", "per-call", "--disable-watcher", "--poll-interval", "1h", "--debounce", "1ms")
+	cmd := exec.CommandContext(ctx, proxyPath, "--refresh-mode", mode, "--disable-watcher", "--poll-interval", "1h", "--debounce", "1ms")
 	cmd.Dir = workspace
 	cmd.Env = append(os.Environ(), "GOWORK=off", "GOENV=off")
 	p := startPeer(t, cmd, filepath.Join(root, "per-call-gopls.log"))
@@ -83,9 +98,20 @@ func TestRealGoplsPerCallFreshProcessAndFileChanges(t *testing.T) {
 		}
 		return response
 	}
-	initialized := call("100", "initialize", `{"protocolVersion":"2025-11-25","clientInfo":{"name":"per-call-acceptance","version":"1"},"capabilities":{"roots":{"listChanged":true}}}`)
+	initialized := call("100", "initialize", initializeParams)
 	if bytes.Contains(initialized, []byte(`"error"`)) {
 		t.Fatalf("initialize: %s", initialized)
+	}
+	var requested struct {
+		ProtocolVersion string `json:"protocolVersion"`
+	}
+	var negotiated struct {
+		Result struct {
+			ProtocolVersion string `json:"protocolVersion"`
+		} `json:"result"`
+	}
+	if json.Unmarshal([]byte(initializeParams), &requested) != nil || json.Unmarshal(initialized, &negotiated) != nil || negotiated.Result.ProtocolVersion != requested.ProtocolVersion {
+		t.Fatalf("unexpected negotiated version for pinned gopls: request=%s response=%s", initializeParams, initialized)
 	}
 	p.send(`{"jsonrpc":"2.0","method":"notifications/initialized"}`)
 	catalogue := call(`"catalogue"`, "tools/list", `{}`)
@@ -148,17 +174,22 @@ func TestRealGoplsPerCallFreshProcessAndFileChanges(t *testing.T) {
 		}
 		current := published()
 		old, next := previous[len(previous)-1], current[len(current)-1]
-		if len(current) <= len(previous) || old.Boot == next.Boot || old.PID == next.PID || next.Generation <= old.Generation {
-			t.Fatalf("tool call reused backend: before=%+v after=%+v", previous, current)
-		}
-		if unchanged && len(current) != len(previous)+1 {
-			t.Fatalf("unchanged call must publish exactly one new backend: before=%+v after=%+v", previous, current)
+		if mode == "per-call" || !unchanged {
+			if len(current) <= len(previous) || old.Boot == next.Boot || old.PID == next.PID || next.Generation <= old.Generation {
+				t.Fatalf("tool call reused backend after required refresh: before=%+v after=%+v", previous, current)
+			}
+			requireBackendExited(t, old.PID)
+			if unchanged && len(current) != len(previous)+1 {
+				t.Fatalf("unchanged per-call request must publish exactly one new backend: before=%+v after=%+v", previous, current)
+			}
+		} else if len(current) != len(previous) || old != next {
+			t.Fatalf("on-change mode replaced an unchanged backend: before=%+v after=%+v", previous, current)
 		}
 		if p.cmd.Process.Pid != proxyPID {
 			t.Fatal("frontend process changed")
 		}
 		previous = current
-		t.Logf("per-call proxy_pid=%d boot_id=%d backend_pid=%d query=%s", proxyPID, next.Boot, next.PID, query)
+		t.Logf("mode=%s proxy_pid=%d boot_id=%d backend_pid=%d query=%s", mode, proxyPID, next.Boot, next.PID, query)
 	}
 	search("1", "FixtureOriginalSymbol", mainFile, "", true)
 	search("2", "FixtureOriginalSymbol", mainFile, "", true)
@@ -195,8 +226,11 @@ func TestRealGoplsPerCallFreshProcessAndFileChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(logs, []byte(`"mode":"default-gopls"`)) || !bytes.Contains(logs, []byte(`"selection_source":"sibling"`)) || !bytes.Contains(logs, []byte(`"refresh_mode":"per-call"`)) {
-		t.Fatalf("missing default sibling/per-call launch evidence: %s", logs)
+	if !bytes.Contains(logs, []byte(`"mode":"default-gopls"`)) || !bytes.Contains(logs, []byte(`"selection_source":"sibling"`)) || !bytes.Contains(logs, []byte(`"refresh_mode":"`+mode+`"`)) {
+		t.Fatalf("missing default sibling/refresh mode launch evidence: %s", logs)
 	}
-	t.Logf("per-call real gopls: %d tool calls, %d published backends, one frontend pid=%d", 7, len(previous), proxyPID)
+	for _, identity := range published() {
+		requireBackendExited(t, identity.PID)
+	}
+	t.Logf("mode=%s real gopls: %d tool calls, %d published backends, one frontend pid=%d", mode, 7, len(previous), proxyPID)
 }
