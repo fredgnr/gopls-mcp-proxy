@@ -180,6 +180,9 @@ type relay struct {
 	frontPending, backPending                     []writeItem
 	frontBytes, backBytes                         int
 	fatal                                         error
+	closingErr                                    error
+	closeAt                                       time.Time
+	initializationLogged                          bool
 }
 
 // Run owns both streams. Closing them is essential to interrupt blocked stdio.
@@ -231,7 +234,7 @@ func Run(parent context.Context, cfg Config, tracker Tracker, factory *backend.F
 		}
 		select {
 		case <-ctx.Done():
-			return nil
+			return r.closingErr
 		case <-poll.C:
 			r.poll = true
 		case <-tick.C:
@@ -241,6 +244,12 @@ func Run(parent context.Context, cfg Config, tracker Tracker, factory *backend.F
 		case ev := <-r.events:
 			switch e := ev.(type) {
 			case incoming:
+				if r.phase == "closing" {
+					if e.boot == 0 && e.err != nil {
+						return r.closingErr
+					}
+					continue
+				}
 				if e.boot == 0 {
 					if e.err != nil {
 						if errors.Is(e.err, io.EOF) {
@@ -278,9 +287,9 @@ func Run(parent context.Context, cfg Config, tracker Tracker, factory *backend.F
 			case stopDone:
 				r.stopped(e)
 			case recoveryDone:
-				if r.proc != nil && r.proc.ID == e.boot {
+				if r.phase == "recovering" && r.proc != nil && r.proc.ID == e.boot {
 					if e.err != nil {
-						r.fatal = fmt.Errorf("protocol_restart_required: %w", e.err)
+						r.failRecovery(e.err)
 					} else {
 						r.phase = "publishing"
 					}
@@ -433,6 +442,12 @@ func (r *relay) advance() {
 	if r.fatal != nil {
 		return
 	}
+	if r.phase == "closing" {
+		if len(r.frontPending) == 0 || !time.Now().Before(r.closeAt) {
+			r.fatal = r.closingErr
+		}
+		return
+	}
 	if r.proc != nil && r.phase == "ready" && r.tracker.Epoch() != r.snapshot.Epoch {
 		r.invalidate("dirty_epoch")
 	}
@@ -500,6 +515,9 @@ func (r *relay) advance() {
 }
 func (r *relay) scanned(e scanDone) {
 	r.scanning = false
+	if r.phase == "closing" {
+		return
+	}
 	if e.err != nil {
 		if r.proc != nil {
 			r.invalidate("input_scan_failed")
@@ -531,6 +549,14 @@ func (r *relay) scanned(e scanDone) {
 	case "initial":
 		if r.phase != "idle" && r.phase != "restarting" {
 			return
+		}
+		// The old process has already been reaped. Known unrecoverable state
+		// must not start a candidate that cannot initialize successfully.
+		if r.generation != 0 {
+			if err := r.recovery.Preflight(); err != nil {
+				r.failRecovery(err)
+				return
+			}
 		}
 		r.candidate = e.snap
 		r.phase = "starting"
@@ -728,6 +754,9 @@ func (r *relay) callBoundaryIdle() bool {
 		len(r.results) == 0 && len(r.readyBatches) == 0 && len(r.frontPending) == 0 && len(r.backPending) == 0
 }
 func (r *relay) expire() {
+	if r.phase == "closing" {
+		return
+	}
 	now := time.Now()
 	if !r.dirtyAt.IsZero() && now.Sub(r.dirtyAt) >= r.cfg.RefreshTimeout {
 		r.fatal = errors.New("refresh_timeout: reconnect required")
@@ -774,6 +803,10 @@ func (r *relay) failControls(err error) {
 	}
 }
 func (r *relay) internal(c internalCall) {
+	if r.phase == "closing" {
+		c.reply <- internalReply{err: r.closingErr}
+		return
+	}
 	if c.ctx.Err() != nil {
 		c.reply <- internalReply{err: c.ctx.Err()}
 		return

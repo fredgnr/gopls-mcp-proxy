@@ -20,7 +20,7 @@ jobs:
     uses: ./.github/workflows/build.yml
 
   test:
-    name: Test (${{ matrix.os }}, Go ${{ matrix.go }})
+    name: Test (${{ matrix.os }}, Go ${{ matrix.go }}, gopls ${{ matrix.gopls }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     strategy:
@@ -30,12 +30,23 @@ jobs:
           - os: ubuntu-latest
             go: '1.25.x'
             integration: false
+            gopls: none
           - os: ubuntu-latest
             go: '1.27.2'
             integration: true
+            gopls: v0.23.0
+          - os: ubuntu-latest
+            go: '1.27.2'
+            integration: true
+            gopls: v0.24.0
           - os: macos-latest
             go: '1.27.2'
             integration: true
+            gopls: v0.23.0
+          - os: macos-latest
+            go: '1.27.2'
+            integration: true
+            gopls: v0.24.0
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -89,11 +100,12 @@ jobs:
       - run: go build ./cmd/gopls-mcp-proxy
       - name: Install pinned gopls
         if: matrix.integration
-        run: go install golang.org/x/tools/gopls@v0.24.0
+        run: go install golang.org/x/tools/gopls@${{ matrix.gopls }}
       - name: Real gopls interoperability and proxy-owned content refresh
         if: matrix.integration
         env:
           GOPLS_INTEGRATION: '1'
+          GOPLS_EXPECTED_VERSION: ${{ matrix.gopls }}
           PROXY_TEST_EVIDENCE_DIR: ${{ runner.temp }}/proxy-evidence
         shell: bash
         run: |
@@ -103,7 +115,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: test-results-${{ matrix.os }}-go-${{ matrix.go }}
+          name: test-results-${{ matrix.os }}-go-${{ matrix.go }}-gopls-${{ matrix.gopls }}
           path: |
             test-results/*.json
             ${{ runner.temp }}/proxy-evidence/**

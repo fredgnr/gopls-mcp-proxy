@@ -54,9 +54,7 @@ func testRealGoplsTwoProtobufUpgrades(t *testing.T, defaultLauncher bool) {
 		t.Logf("%s", bytes.TrimSpace(output))
 		versions = append(versions, string(bytes.TrimSpace(output)))
 	}
-	if defaultLauncher && versions[1] != "golang.org/x/tools/gopls v0.24.0" {
-		t.Fatalf("default launcher acceptance requires pinned gopls v0.24.0, got %s", versions[1])
-	}
+	requireGoplsVersion(t, []byte(versions[1]))
 	root := t.TempDir()
 	archiveEvidence(t, root)
 	root, err = filepath.EvalSymlinks(root)

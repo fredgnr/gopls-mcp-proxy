@@ -90,6 +90,64 @@ func TestRawPerCallOptInOnly(t *testing.T) {
 	}
 }
 
+// The fixture reads files only at boot, so both modes must prove replacement
+// independently of gopls's own file watching. Replayed initialization must retain
+// the original client identity and the known static elicitation declarations.
+func TestRawCodexRecoveryAcrossRefreshModes(t *testing.T) {
+	for _, mode := range []string{"per-call", "on-change"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newFixture(t)
+			p := f.proxyFlags(t, []string{"--refresh-mode", mode})
+			initialized := p.call("100", "initialize", codexInitializeParams)
+			if bytes.Contains(initialized, []byte(`"error"`)) || !bytes.Contains(initialized, []byte(`"protocolVersion":"2025-06-18"`)) {
+				t.Fatalf("Codex fixture initialize: %s", initialized)
+			}
+			p.send(`{"jsonrpc":"2.0","method":"notifications/initialized"}`)
+			initial := p.snapshot("0", false)
+			catalogue := p.call(`"catalogue"`, "tools/list", `{}`)
+			first := perCallSnapshot(t, p, "1", false)
+			second := perCallSnapshot(t, p, "2", false)
+			if mode == "per-call" {
+				requirePerCallBoot(t, initial, first)
+				requirePerCallBoot(t, first, second)
+				requireBackendExited(t, initial.PID)
+				requireBackendExited(t, first.PID)
+			} else if initial.Boot != first.Boot || first.Boot != second.Boot {
+				t.Fatal("unchanged on-change calls replaced the backend")
+			}
+			writeInput(t, f.inputs[0], "B", true)
+			third := perCallSnapshot(t, p, "3", false)
+			requirePerCallBoot(t, second, third)
+			requireBackendExited(t, second.PID)
+			requireInput(t, third, "main.go", "B")
+			for _, snapshot := range []testbackend.Snapshot{first, second, third} {
+				var request struct {
+					Method string          `json:"method"`
+					Params json.RawMessage `json:"params"`
+				}
+				if err := json.Unmarshal(snapshot.Initialize, &request); err != nil {
+					t.Fatal(err)
+				}
+				if request.Method != "initialize" || !rawJSONEqual(request.Params, []byte(codexInitializeParams)) {
+					t.Fatalf("Codex initialization changed across refresh: %s", snapshot.Initialize)
+				}
+			}
+			if after := p.call(`"catalogue"`, "tools/list", `{}`); !rawJSONEqual(catalogue, after) {
+				t.Fatalf("catalogue changed across recovery: before=%s after=%s", catalogue, after)
+			}
+			if executions := perCallExecutions(t, f); len(executions) != 3 {
+				t.Fatalf("expected exactly three dispatched calls without replay: %+v", executions)
+			}
+			p.shutdown()
+			for _, event := range f.events(t) {
+				if event.Kind == "boot" {
+					requireBackendExited(t, event.PID)
+				}
+			}
+		})
+	}
+}
+
 func TestRawPerCallModernFirstCall(t *testing.T) {
 	f := newFixture(t)
 	p := f.proxyFlags(t, []string{"--refresh-mode", "per-call"})

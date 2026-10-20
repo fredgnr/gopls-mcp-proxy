@@ -11,6 +11,9 @@ import (
 )
 
 func (r *relay) fromFront(raw []byte) {
+	if r.phase == "closing" {
+		return
+	}
 	f, err := wire.ParseFrame(raw)
 	if err != nil {
 		r.fatal = err
@@ -337,6 +340,9 @@ func joinFrame(raws [][]byte, batch bool) []byte {
 	return append(append([]byte{'['}, bytes.Join(raws, []byte{','})...), ']')
 }
 func (r *relay) fromBack(raw []byte) {
+	if r.phase == "closing" {
+		return
+	}
 	f, err := wire.ParseFrame(raw)
 	if err != nil {
 		r.fatal = fmt.Errorf("backend protocol frame: %w", err)
@@ -591,6 +597,9 @@ func (r *relay) deliverBatch(g *batchGroup, fresh bool) {
 				m, err := wire.ParseMessage(g.responses[i])
 				if err == nil {
 					r.recovery.ObserveResponse(rec.msg, m)
+					if rec.msg.Method == "initialize" {
+						r.logInitializationRecovery()
+					}
 				}
 			}
 		}
