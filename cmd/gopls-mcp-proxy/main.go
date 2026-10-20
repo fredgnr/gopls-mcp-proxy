@@ -16,6 +16,7 @@ import (
 
 	"github.com/fredgnr/gopls-mcp-proxy/internal/backend"
 	"github.com/fredgnr/gopls-mcp-proxy/internal/buildinfo"
+	"github.com/fredgnr/gopls-mcp-proxy/internal/launcher"
 	"github.com/fredgnr/gopls-mcp-proxy/internal/proxy"
 	"github.com/fredgnr/gopls-mcp-proxy/internal/workspace"
 )
@@ -39,8 +40,16 @@ func (f removedFlag) Set(string) error {
 	return fmt.Errorf("--%s was removed: set the caller's working directory, use --watch-root for extra inputs, and start with -- program argv (for example -- gopls mcp)", f)
 }
 
+type launchMode string
+
+const (
+	defaultGopls    launchMode = "default-gopls"
+	explicitBackend launchMode = "explicit"
+)
+
 type options struct {
 	cfg                          proxy.Config
+	mode                         launchMode
 	program                      string
 	argv                         []string
 	watchRoots, include, exclude paths
@@ -71,8 +80,11 @@ func parseOptions(args []string, stderr io.Writer) (options, error) {
 		flags.Var(removedFlag(name), name, "removed; use caller cwd, --watch-root and -- program argv")
 	}
 	flags.Usage = func() {
-		fmt.Fprintln(stderr, "Usage: gopls-mcp-proxy [proxy options] -- program [backend arguments...]")
+		fmt.Fprintln(stderr, "Usage: gopls-mcp-proxy [proxy options]")
+		fmt.Fprintln(stderr, "       gopls-mcp-proxy [proxy options] -- program [backend arguments...]")
+		fmt.Fprintln(stderr, "Without --, start gopls mcp using the physical proxy directory, then absolute PATH directories.")
 		fmt.Fprintln(stderr, "The backend inherits cwd and environment. Arguments after -- are passed unchanged.")
+		fmt.Fprintln(stderr, "Keep the original gopls binary. When migrating args=[\"mcp\"], remove args or use -- gopls mcp.")
 		flags.PrintDefaults()
 	}
 	flags.Var(&o.watchRoots, "watch-root", "additional input directory or file (repeatable; relative to cwd)")
@@ -104,16 +116,22 @@ func parseOptions(args []string, stderr io.Writer) (options, error) {
 		return o, err
 	}
 	if flags.NArg() != 0 {
-		return o, fmt.Errorf("unexpected arguments before --: %v; use -- program argv", flags.Args())
+		return o, errors.New("unexpected arguments before --; use -- program argv, or remove args=[\"mcp\"] to use the default gopls launcher")
 	}
 	if o.version || o.help {
 		return o, nil
 	}
-	if boundary < 0 || boundary+1 >= len(args) || args[boundary+1] == "" {
-		return o, errors.New("backend program is required: gopls-mcp-proxy [proxy options] -- program [arguments...]")
+	if boundary < 0 {
+		o.mode = defaultGopls
+		o.argv = []string{"mcp"}
+	} else {
+		if boundary+1 >= len(args) || args[boundary+1] == "" {
+			return o, errors.New("backend program is required after --: gopls-mcp-proxy [proxy options] -- program [arguments...]")
+		}
+		o.mode = explicitBackend
+		o.program = args[boundary+1]
+		o.argv = slices.Clone(args[boundary+2:])
 	}
-	o.program = args[boundary+1]
-	o.argv = slices.Clone(args[boundary+2:])
 	if err := o.cfg.Validate(); err != nil {
 		return o, err
 	}
@@ -124,7 +142,13 @@ func parseOptions(args []string, stderr io.Writer) (options, error) {
 }
 
 func run(ctx context.Context, args []string) error {
-	o, err := parseOptions(args, os.Stderr)
+	return runWithSetup(ctx, args, os.Stderr, runConfigured)
+}
+
+// Keep local diagnostics ahead of every runtime dependency, including cwd,
+// executable identity, backend discovery, and workspace scanning.
+func runWithSetup(ctx context.Context, args []string, stderr io.Writer, setup func(context.Context, options) error) error {
+	o, err := parseOptions(args, stderr)
 	if err != nil {
 		return err
 	}
@@ -132,27 +156,57 @@ func run(ctx context.Context, args []string) error {
 		return nil
 	}
 	if o.version {
-		fmt.Fprintf(os.Stderr, "gopls-mcp-proxy %s (commit %s)\n", buildinfo.Version, buildinfo.Commit)
+		fmt.Fprintf(stderr, "gopls-mcp-proxy %s (commit %s)\n", buildinfo.Version, buildinfo.Commit)
 		return nil
 	}
+	return setup(ctx, o)
+}
+
+func runConfigured(ctx context.Context, o options) error {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return err
 	}
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	o.cfg.Logger = logger
+	env := os.Environ()
+	self, err := launcher.CaptureSelf()
+	if err != nil {
+		return err
+	}
+	selectionSource := "explicit"
+	if o.mode == defaultGopls {
+		spec, err := launcher.ResolveDefault(self, environmentValue(env, "PATH"))
+		if err != nil {
+			return err
+		}
+		o.program, o.argv, selectionSource = spec.Locator, spec.Args, spec.SelectionSource
+	}
+	factory, err := backend.NewFactory(backend.Config{Executable: o.program, Args: o.argv, Workspace: cwd, Env: env, ShutdownTimeout: o.shutdown, CleanupTimeout: o.cfg.CleanupTimeout, Logger: logger, BeforeStart: self.Check})
+	if err != nil {
+		return err
+	}
+	if err := self.Check(ctx, factory.Locator()); err != nil {
+		return err
+	}
 	trackerCfg := workspace.Config{Workspace: cwd, WatchRoots: o.watchRoots, Include: o.include, Exclude: o.exclude, GoDiscovery: o.goDiscovery}
 	if o.goDiscovery {
-		trackerCfg.WorkFile = os.Getenv("GOWORK")
+		trackerCfg.WorkFile = environmentValue(env, "GOWORK")
 	}
 	tracker, err := workspace.New(trackerCfg, logger)
 	if err != nil {
 		return err
 	}
-	factory, err := backend.NewFactory(backend.Config{Executable: o.program, Args: o.argv, Workspace: cwd, Env: os.Environ(), ShutdownTimeout: o.shutdown, CleanupTimeout: o.cfg.CleanupTimeout, Logger: logger})
-	if err != nil {
-		return err
-	}
-	logger.Info("proxy starting", "version", buildinfo.Version, "commit", buildinfo.Commit)
+	logger.Info("proxy starting", "version", buildinfo.Version, "commit", buildinfo.Commit, "mode", o.mode, "selection_source", selectionSource, "backend", factory.Locator(), "cwd", cwd)
 	return proxy.Run(ctx, o.cfg, tracker, factory, os.Stdin, os.Stdout)
+}
+
+func environmentValue(env []string, name string) string {
+	var value string
+	for _, entry := range env {
+		if found, ok := strings.CutPrefix(entry, name+"="); ok {
+			value = found
+		}
+	}
+	return value
 }

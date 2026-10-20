@@ -53,4 +53,4 @@ P0–P5 的产物与实际验证入口见实施记录。完整 VAL 场景目录�
 
 ## 后续增量方案
 
-[默认 gopls 启动入口](../default-gopls-launcher/README.md)规划无参数时自动定位后端，让没有 args 的 Codex 配置只修改 command。该提案状态为 **Proposed**，复用本方案的刷新和协议实现；当前显式后端要求在后续实施后再更新，历史验收结果不代表默认入口已通过。
+[默认 gopls 启动入口](../default-gopls-launcher/README.md)已实现无参数自动定位后端，并复用本方案的刷新和协议实现。当前新增入口、平台与真实 Codex 的分层验收见[实施记录](../default-gopls-launcher/implementation-results.md)；历史验收结果不代表新增入口已通过。

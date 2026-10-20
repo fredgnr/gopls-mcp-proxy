@@ -1,0 +1,59 @@
+{
+  "date": "2026-10-20",
+  "status": "blocked",
+  "cases": {
+    "VAL-LAUNCH-033": "blocked: native control discovers 8 tools, but actual Codex thread/start did not return in 20s and one 45s retry; tool call not reached",
+    "VAL-LAUNCH-034": "partial only: actual Codex target config and discovery verified; same-thread call/refresh and same proxy PID not verified",
+    "VAL-LAUNCH-035": "blocked: no actual tool/refresh timing, no cold-cache sample; effective numeric startup/tool defaults are not exposed by generated schema/config/read"
+  },
+  "client": "codex-cli 0.159.2",
+  "backend": "gopls v0.24.0",
+  "platform": "Linux amd64",
+  "isolation": "invocation-only -c gopls table; unrelated cua_repl disabled by separate invocation flag; user configs and authentication untouched",
+  "config_evidence": "config/read verified only command + default_tools_approval_mode as explicit target origins; args=[] and enabled=true are normalized defaults; no target cwd/env/env_vars/timeout overrides. Full local trace is not represented by this summary.",
+  "discovery": {
+    "control_ms": 182.796,
+    "target_ms": 104.7,
+    "tools": 8,
+    "stable_tool_catalogs_equal": true,
+    "assertion_scope": "actual Codex app-server mcpServerStatus/list without thread; not tool invocation or same-session refresh"
+  },
+  "thread_failure": "thread/start ephemeral with project cwd did not return; no server request was pending in observed messages (only configWarning and remoteControl/status/changed notifications). Root cause not established; no settings/credential broadening attempted.",
+  "cleanup": "each dedicated app-server was terminated, then killed after 5s if it did not stop; no same-session cleanup pass claimed",
+  "budgets": "No target timeout configured. Numeric 10/60 defaults cannot be proven from this installed client schema/config metadata, so no default-budget acceptance claim.",
+  "build_identity": {
+    "source_sha256": {
+      "cmd/gopls-mcp-proxy/main.go": "f34b3877a17c3a8522f5c4277df3475f391f09f4ed372933a88526a75f3b0113",
+      "internal/backend/backend.go": "9428d6478a8ca7066677fe43ea880b8409b54378c0c4f72d4a5124a7ff81a291",
+      "internal/backend/process_other.go": "f4404756ca586253de60a0feb605ca4b6e79f23b6a8fe4c0d62c552a5c21abd5",
+      "internal/backend/process_unix.go": "400a8ab97a88f9ad45d49f14f43b694fd8879669ca669bed55d467aed175012d",
+      "internal/buildinfo/buildinfo.go": "d75fdf8c143c546869a1809abe154ff6407450bdb5bcfff5a6b05f4b5cb634cd",
+      "internal/launcher/identity.go": "2fc10fa4214213718a8d8fd231ea46b8ca9e52d40fee3448a85a1acf4cfb9861",
+      "internal/launcher/resolver.go": "3e0c4850d136b67f254de7c5e01bcf109fd1ba9df8002c419e62df7fe7c434e7",
+      "internal/protocol/protocol.go": "283ec4fae7fa63ef916d72f52e5c5b676ee68cab3e0bb67cace5ad3e27b60ce6",
+      "internal/proxy/recovery.go": "95b7bf40cae74e41843312219c76c6ac3b8836001c9580637bff127666e104d9",
+      "internal/proxy/router.go": "285db90f89817790da7bfd2de3365332c9ec4a99b416b0b30f550d09fcbf18a0",
+      "internal/proxy/supervisor.go": "555b0b5eef07859985859e52c86feb3bdd179979aa41d654c6a520f1841db83b",
+      "internal/wire/wire.go": "e251671fd2998be27f92993b988db0ff2ffdc92ffd9e63c75fba219561a8e5ab",
+      "internal/workspace/discovery.go": "55ca12d993e1e586f02c5391be09245a613b1dce8d599fbb8023d77b1e5091d1",
+      "internal/workspace/glob.go": "4d12e5907119d407e4011192316734bf63c50cdfe6487a155759a90829dd4d1f",
+      "internal/workspace/tracker.go": "398dd4bec0f2a820a26027566a88b16ecfd9dc3f739484eeca9f79203d7c170a",
+      "go.mod": "e0eeb394f89d69e0ee3dc6200148fe1cff8d07497a8a5f2d09c30922eb0a173f",
+      "go.sum": "75c0c6047c6d84d4067ba4681bc9ec8b06f7c92bdd08a000e0ceb8c2a9be7868"
+    },
+    "binaries": {
+      "gopls-mcp-proxy": "60633a7c6ad0a509c4ccce0dde49877086e61cfbfc80387a2f16ad8446d09db3",
+      "gopls": "5177cceba7df05be62efa67ff22ba22a95e7182fcb524b450e2159efe2d9a71c"
+    },
+    "codex_version": "codex-cli 0.159.2",
+    "go_version": "go version go1.26.1 linux/amd64",
+    "gopls_version": "golang.org/x/tools/gopls v0.24.0",
+    "platform": "Linux-6.18.55-x86_64-with-glibc2.39",
+    "uid": 0,
+    "build_command": "go build -o <scratch>/bin/gopls-mcp-proxy ./cmd/gopls-mcp-proxy",
+    "workspace_file_count": 2,
+    "workspace_bytes": 156,
+    "cache_state": "inherited existing Go cache; not cold cache",
+    "revision": "working source based on 50aaf08f7b1f0465e316c19721917b0b705b0bdf; runtime hashes bind build; final remote commit pending"
+  }
+}

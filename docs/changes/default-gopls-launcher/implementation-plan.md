@@ -1,6 +1,6 @@
 # 默认 gopls 启动实施计划
 
-本计划对应[方案入口](README.md)、[设计契约](design.md)和[增量验收](validation.md)。本次提交只定义后续开发任务，不改变运行时代码。以下 18 项任务全部为 **pending**；旧功能的通过记录不能作为本次默认启动已经实现的证据。
+本计划对应[方案入口](README.md)、[设计契约](design.md)和[增量验收](validation.md)。任务已进入实施验收，逐项执行状态和证据见[实施记录](implementation-results.md)。旧功能的通过记录不能作为本次默认启动已经实现的证据。
 
 审查基线为提交 [dc9821f76228985333aa590bb1705149d1ba2061](https://github.com/fredgnr/gopls-mcp-proxy/tree/dc9821f76228985333aa590bb1705149d1ba2061)，对应 tree 为 314229ab52794775e5389febf29d15ef910455a8。后续实现和验收必须记录实际 HEAD、tree 与被测二进制哈希，不能把本方案基线误记成实现版本。
 
@@ -47,10 +47,10 @@
 
 | 任务 | 工作与交付 | 依赖及验收映射 | 状态 |
 |---|---|---|---|
-| TP-L0.1 | 固定默认/显式启动意图、定位结果、错误分类、selfIdentity 和 Guard 的接口契约。写明默认 PATH 的“首个 Lstat 存在者绑定”规则、双重自身身份比较及未知身份失败规则。 | 无前置依赖；为 VAL-LAUNCH-001～022 准备断言，不标记这些完整用例通过。 | pending |
-| TP-L0.2 | 建立独立 gopls 夹具入口。入口只接受预期 mcp 参数，每个 boot 只读一次内容，保留原始帧、执行次数、boot/PID。直接同进程写 A→B 后仍返回 A，新进程才返回 B。 | TP-L0.1；VAL-LAUNCH-026。 | pending |
-| TP-L0.3 | 建立 sibling、PATH、启动 symlink、hardlink、损坏候选和升级布局。构建/日志/计时/配置证据放在 watchroot 外，预留 HEAD/tree/hash/run attempt 等记录字段；权限用例确保实际运行身份能复现。 | TP-L0.1；准备 VAL-LAUNCH-007～024、028、035、036 的夹具与记录，不提前算通过。 | pending |
-| TP-L0.4 | 独立审阅夹具和契约：默认后端路径、argv、resolver 结果不能借 env 或测试专属生产开关注入；fixture 输入和证据定位通道不能改变代理的默认行为。核对旧断言的最小替换范围。 | TP-L0.2、TP-L0.3；L0 门禁为 VAL-LAUNCH-026 自证和审阅记录。 | pending |
+| TP-L0.1 | 固定默认/显式启动意图、定位结果、错误分类、selfIdentity 和 Guard 的接口契约。写明默认 PATH 的“首个 Lstat 存在者绑定”规则、双重自身身份比较及未知身份失败规则。 | 无前置依赖；为 VAL-LAUNCH-001～022 准备断言，不标记这些完整用例通过。 | 见[实施记录](implementation-results.md#任务状态) |
+| TP-L0.2 | 建立独立 gopls 夹具入口。入口只接受预期 mcp 参数，每个 boot 只读一次内容，保留原始帧、执行次数、boot/PID。直接同进程写 A→B 后仍返回 A，新进程才返回 B。 | TP-L0.1；VAL-LAUNCH-026。 | 见[实施记录](implementation-results.md#任务状态) |
+| TP-L0.3 | 建立 sibling、PATH、启动 symlink、hardlink、损坏候选和升级布局。构建/日志/计时/配置证据放在 watchroot 外，预留 HEAD/tree/hash/run attempt 等记录字段；权限用例确保实际运行身份能复现。 | TP-L0.1；准备 VAL-LAUNCH-007～024、028、035、036 的夹具与记录，不提前算通过。 | 见[实施记录](implementation-results.md#任务状态) |
+| TP-L0.4 | 独立审阅夹具和契约：默认后端路径、argv、resolver 结果不能借 env 或测试专属生产开关注入；fixture 输入和证据定位通道不能改变代理的默认行为。核对旧断言的最小替换范围。 | TP-L0.2、TP-L0.3；L0 门禁为 VAL-LAUNCH-026 自证和审阅记录。 | 见[实施记录](implementation-results.md#任务状态) |
 
 L0 可以为 fixture 提供合成输入清单、证据目录等测试数据。禁止借这些通道设置默认 backend executable、默认 argv 或偷偷增加 proxy 选项。生产代码不能增加根据测试环境变量跳过 Guard、绕过定位或改变运行模式的分支。
 
@@ -58,9 +58,9 @@ L0 可以为 fixture 提供合成输入清单、证据目录等测试数据。�
 
 | 任务 | 工作与交付 | 依赖及验收映射 | 状态 |
 |---|---|---|---|
-| TP-L1.1 | 修改 main 的参数解析与 usage：无分隔符的合法选项产生默认意图；显式分隔符后的 argv 逐项保留；缺后端、裸 mcp、位置参数、旧参数及非法配置继续失败。help/version 先返回，不解析后端。 | TP-L0.4；VAL-LAUNCH-001～005；VAL-LAUNCH-006 的解析子断言。 | pending |
-| TP-L1.2 | 实现默认 resolver：os.Executable 经 EvalSymlinks 定位物理目录；所有候选先 Lstat。sibling 仅真实 ENOENT 才进入 PATH；PATH 只考虑绝对目录，绑定第一个存在的 gopls，候选不可用即失败。返回原符号路径的绝对 locator，不冻结其目标。 | TP-L0.4；VAL-LAUNCH-007、009～013、015；VAL-LAUNCH-008、014 的组件子断言。 | pending |
-| TP-L1.3 | 实现身份快照和 Guard 组件：比较候选当前文件身份与 proxy 启动快照、当前自身 locator 身份；覆盖 direct/symlink/hardlink 和无法完成校验。测试注入独立 selfIdentity，不在 backend 层自行猜测。 | TP-L0.4；VAL-LAUNCH-016～018 的组件子断言。 | pending |
+| TP-L1.1 | 修改 main 的参数解析与 usage：无分隔符的合法选项产生默认意图；显式分隔符后的 argv 逐项保留；缺后端、裸 mcp、位置参数、旧参数及非法配置继续失败。help/version 先返回，不解析后端。 | TP-L0.4；VAL-LAUNCH-001～005；VAL-LAUNCH-006 的解析子断言。 | 见[实施记录](implementation-results.md#任务状态) |
+| TP-L1.2 | 实现默认 resolver：os.Executable 经 EvalSymlinks 定位物理目录；所有候选先 Lstat。sibling 仅真实 ENOENT 才进入 PATH；PATH 只考虑绝对目录，绑定第一个存在的 gopls，候选不可用即失败。返回原符号路径的绝对 locator，不冻结其目标。 | TP-L0.4；VAL-LAUNCH-007、009～013、015；VAL-LAUNCH-008、014 的组件子断言。 | 见[实施记录](implementation-results.md#任务状态) |
+| TP-L1.3 | 实现身份快照和 Guard 组件：比较候选当前文件身份与 proxy 启动快照、当前自身 locator 身份；覆盖 direct/symlink/hardlink 和无法完成校验。测试注入独立 selfIdentity，不在 backend 层自行猜测。 | TP-L0.4；VAL-LAUNCH-016～018 的组件子断言。 | 见[实施记录](implementation-results.md#任务状态) |
 
 TP-L1.1 主要拥有 main 及其测试；TP-L1.2 主要拥有 resolver 文件；TP-L1.3 主要拥有 identity 文件。三项可按 L0 接口约定并行。遇到公共类型改动先协调单一修改者，避免为并行重复实现定位逻辑。L1 组件通过后再进入统一装配，不用尚未存在的 CLI 端到端结果阻塞某一个组件。
 
@@ -68,9 +68,9 @@ TP-L1.1 主要拥有 main 及其测试；TP-L1.2 主要拥有 resolver 文件；
 
 | 任务 | 工作与交付 | 依赖及验收映射 | 状态 |
 |---|---|---|---|
-| TP-L2.1 | 在 run 中组装启动意图。默认模式生成固定 locator 和 argv=[mcp]，显式模式保留原始 program/argv 路径规则。help/version 在捕获自身身份、查后端、运行 Go 和创建 tracker 之前返回；本地参数与定位校验失败也不进入项目扫描。cwd/env 原样进入现有 tracker/backend 配置。 | TP-L1.1～L1.3；完整 VAL-LAUNCH-006、014；VAL-LAUNCH-023～025、028 的组件断言。 | pending |
-| TP-L2.2 | 将生产 Guard 注入 Factory，每次启动在执行前检查候选及自身身份；启动和重启失败继续受现有预算、boot attempt 与 cleanup 规则约束。全会话不重搜 sibling/PATH；保留 gopls symlink locator 以允许升级。 | TP-L2.1；完整 VAL-LAUNCH-016～018；VAL-LAUNCH-019～022 的组件断言。 | pending |
-| TP-L2.3 | 跑通现有 generic backend、CLI、workspace、raw 协议回归；核对默认 PATH 限制未泄漏到显式入口。检查新错误只写 stderr，不带完整 env，不产生额外协议输出或业务重放。 | TP-L2.2；VAL-LAUNCH-030；VAL-LAUNCH-029 的组件断言。 | pending |
+| TP-L2.1 | 在 run 中组装启动意图。默认模式生成固定 locator 和 argv=[mcp]，显式模式保留原始 program/argv 路径规则。help/version 在捕获自身身份、查后端、运行 Go 和创建 tracker 之前返回；本地参数与定位校验失败也不进入项目扫描。cwd/env 原样进入现有 tracker/backend 配置。 | TP-L1.1～L1.3；完整 VAL-LAUNCH-006、014；VAL-LAUNCH-023～025、028 的组件断言。 | 见[实施记录](implementation-results.md#任务状态) |
+| TP-L2.2 | 将生产 Guard 注入 Factory，每次启动在执行前检查候选及自身身份；启动和重启失败继续受现有预算、boot attempt 与 cleanup 规则约束。全会话不重搜 sibling/PATH；保留 gopls symlink locator 以允许升级。 | TP-L2.1；完整 VAL-LAUNCH-016～018；VAL-LAUNCH-019～022 的组件断言。 | 见[实施记录](implementation-results.md#任务状态) |
+| TP-L2.3 | 跑通现有 generic backend、CLI、workspace、raw 协议回归；核对默认 PATH 限制未泄漏到显式入口。检查新错误只写 stderr，不带完整 env，不产生额外协议输出或业务重放。 | TP-L2.2；VAL-LAUNCH-030；VAL-LAUNCH-029 的组件断言。 | 见[实施记录](implementation-results.md#任务状态) |
 
 L2 不重写协议解析或 gopls 工具目录，不引入隐藏的 CLI 自动转发规则。裸 `gopls-mcp-proxy mcp` 仍不能替代显式模式；后端 help/version 仍需位于显式分隔符后。Guard 降低直接或文件别名指向 proxy 的循环风险；它不能消除校验与 exec 之间的 TOCTOU，也不保证识别任意 wrapper 的间接循环。
 
@@ -78,9 +78,9 @@ L2 不重写协议解析或 gopls 工具目录，不引入隐藏的 CLI 自动�
 
 | 任务 | 工作与交付 | 依赖及验收映射 | 状态 |
 |---|---|---|---|
-| TP-L3.1 | 以实际构建文件创建 sibling/PATH 安装布局，直接启动 proxy 且 args 长度为 0。验证物理目录、自身启动 symlink/hardlink、mcp 唯一参数、cwd/env/roots 和纯 stdio。另建只有合法 proxy 选项的入口用例。 | TP-L2.3、TP-L0.2；VAL-LAUNCH-008、023～025、028、029。 | pending |
-| TP-L3.2 | 用同一个前端连接与 proxy PID 运行无自刷新夹具的内容变化、后端目标升级和后续指向 self 的故障。核对 boot、真实执行记录和固定 locator，失败时不选择另一个版本、不自动 replay 已派发请求。 | TP-L3.1；VAL-LAUNCH-019～022、027。 | pending |
-| TP-L3.3 | 把实际 gopls v0.24.0 安装或复制到受控默认布局，零参数启动 proxy。使用原生 gopls mcp 作独立互通对照，覆盖工具发现/调用、protobuf 两次升级与源码变化。 | TP-L3.1、TP-L3.2；VAL-LAUNCH-031、032。 | pending |
+| TP-L3.1 | 以实际构建文件创建 sibling/PATH 安装布局，直接启动 proxy 且 args 长度为 0。验证物理目录、自身启动 symlink/hardlink、mcp 唯一参数、cwd/env/roots 和纯 stdio。另建只有合法 proxy 选项的入口用例。 | TP-L2.3、TP-L0.2；VAL-LAUNCH-008、023～025、028、029。 | 见[实施记录](implementation-results.md#任务状态) |
+| TP-L3.2 | 用同一个前端连接与 proxy PID 运行无自刷新夹具的内容变化、后端目标升级和后续指向 self 的故障。核对 boot、真实执行记录和固定 locator，失败时不选择另一个版本、不自动 replay 已派发请求。 | TP-L3.1；VAL-LAUNCH-019～022、027。 | 见[实施记录](implementation-results.md#任务状态) |
+| TP-L3.3 | 把实际 gopls v0.24.0 安装或复制到受控默认布局，零参数启动 proxy。使用原生 gopls mcp 作独立互通对照，覆盖工具发现/调用、protobuf 两次升级与源码变化。 | TP-L3.1、TP-L3.2；VAL-LAUNCH-031、032。 | 见[实施记录](implementation-results.md#任务状态) |
 
 真实 gopls 可以有自己的刷新能力，因此 TP-L3.3 只证明实际工具的兼容性和默认入口互通；独立的刷新因果仍由 TP-L3.2 的不自刷新夹具证明。辅助程序安装或测试准备阶段可以查找 pinned gopls，但实际 proxy 命令必须无参数，且不得通过 env 向生产默认 resolver 传入选定后端路径。
 
@@ -88,11 +88,11 @@ L2 不重写协议解析或 gopls 工具目录，不引入隐藏的 CLI 自动�
 
 | 任务 | 工作与交付 | 依赖及验收映射 | 状态 |
 |---|---|---|---|
-| TP-L4.1 | 在隔离且可审计的有效 Codex 配置下，先验证合法原生控制配置，再验证题述无 args 模板只改 command 的目标配置。目标 MCP 条目只显式声明 command、default_tools_approval_mode 两键，合并后没有额外 args/env/cwd/超时覆盖。记录客户端版本、实际加载的配置、cwd 与真实协议/进程证据。 | TP-L3.3；VAL-LAUNCH-033、034。客户端不可用时保留 pending。 | pending |
-| TP-L4.2 | 不增加 timeout 配置，测量冷启动、首次扫描、initialize、tools/list、普通工具及刷新后的请求。分别报告 Codex 默认启动 10s、工具 60s 与 proxy 现有内部预算的实际效果。 | TP-L4.1；VAL-LAUNCH-035。无法在默认预算内完成即不能宣称该测试条件下 command-only 成立。 | pending |
-| TP-L4.3 | 把默认启动用例纳入 Linux/macOS 和既有 Go/gopls 版本门禁，核对测试选择器确实选中。保留只读 CI 权限、checkout persist-credentials:false、固定 Actions 版本和原有证据上传；缺必需工具不得静默 skip。 | TP-L3.3；VAL-LAUNCH-036 的自动化和跨平台部分；可与 TP-L4.1、TP-L4.2 并行。 | pending |
-| TP-L4.4 | 更新 README、integration/README 及帮助文本；分别说明无 args 默认启动、显式泛用模式、已有 args=[mcp] 配置迁移，以及默认 cwd/监测范围和安装布局。按实际运行结果填写案例状态与限制。 | TP-L4.1～L4.3 结果；VAL-LAUNCH-034～036 的文档和结论映射。未运行项目仍 pending。 | pending |
-| TP-L4.5 | 独立复核源码、任务与证据对应关系。确认二进制来自被审查 HEAD/tree，所有必需平台的完整断言通过，真实 Codex 结果没有被 raw harness 替代；形成最终验收结论。 | TP-L4.4；汇总 VAL-LAUNCH-001～036，不新增替代性成功标准。 | pending |
+| TP-L4.1 | 在隔离且可审计的有效 Codex 配置下，先验证合法原生控制配置，再验证题述无 args 模板只改 command 的目标配置。目标 MCP 条目只显式声明 command、default_tools_approval_mode 两键，合并后没有额外 args/env/cwd/超时覆盖。记录客户端版本、实际加载的配置、cwd 与真实协议/进程证据。 | TP-L3.3；VAL-LAUNCH-033、034。客户端不可用时保留 pending。 | 见[实施记录](implementation-results.md#任务状态) |
+| TP-L4.2 | 不增加 timeout 配置，测量冷启动、首次扫描、initialize、tools/list、普通工具及刷新后的请求。分别报告 Codex 默认启动 10s、工具 60s 与 proxy 现有内部预算的实际效果。 | TP-L4.1；VAL-LAUNCH-035。无法在默认预算内完成即不能宣称该测试条件下 command-only 成立。 | 见[实施记录](implementation-results.md#任务状态) |
+| TP-L4.3 | 把默认启动用例纳入 Linux/macOS 和既有 Go/gopls 版本门禁，核对测试选择器确实选中。保留只读 CI 权限、checkout persist-credentials:false、固定 Actions 版本和原有证据上传；缺必需工具不得静默 skip。 | TP-L3.3；VAL-LAUNCH-036 的自动化和跨平台部分；可与 TP-L4.1、TP-L4.2 并行。 | 见[实施记录](implementation-results.md#任务状态) |
+| TP-L4.4 | 更新 README、integration/README 及帮助文本；分别说明无 args 默认启动、显式泛用模式、已有 args=[mcp] 配置迁移，以及默认 cwd/监测范围和安装布局。按实际运行结果填写案例状态与限制。 | TP-L4.1～L4.3 结果；VAL-LAUNCH-034～036 的文档和结论映射。未运行项目仍 pending。 | 见[实施记录](implementation-results.md#任务状态) |
+| TP-L4.5 | 独立复核源码、任务与证据对应关系。确认二进制来自被审查 HEAD/tree，所有必需平台的完整断言通过，真实 Codex 结果没有被 raw harness 替代；形成最终验收结论。 | TP-L4.4；汇总 VAL-LAUNCH-001～036，不新增替代性成功标准。 | 见[实施记录](implementation-results.md#任务状态) |
 
 ### 子代理协作
 
@@ -130,5 +130,5 @@ L2 不重写协议解析或 gopls 工具目录，不引入隐藏的 CLI 自动�
 
 已通过工程验证的入口代码可以单独合入；真实 Codex 证据缺失时，产品验收继续保持 pending/blocked，并在交付说明中明确区分。代码合入与“只改 command 已完全验收”是两个独立状态。
 
-本文件与[验收矩阵](validation.md)只提出工作，不报告已实现、已运行或已发布。
+本文件保留原任务契约；[实施记录](implementation-results.md)登记当前执行结果。不创建 tag 或 Release。
 

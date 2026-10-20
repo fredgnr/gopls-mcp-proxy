@@ -1,6 +1,6 @@
 # 默认 gopls 启动验收计划
 
-本文件是[默认启动设计](design.md)的增量验收，任务安排见[实施计划](implementation-plan.md)。本次只提交方案，以下 **36 个新用例全部为 pending**，没有执行记录，也不报告默认启动已经可用。
+本文件是[默认启动设计](design.md)的增量验收，任务安排见[实施计划](implementation-plan.md)。以下 36 个用例保留原有断言契约；实际运行、平台和客户端状态统一登记在[实施记录](implementation-results.md)，避免把组件通过扩大为整个产品验收。
 
 审查基线为 [dc9821f76228985333aa590bb1705149d1ba2061](https://github.com/fredgnr/gopls-mcp-proxy/tree/dc9821f76228985333aa590bb1705149d1ba2061)，tree 为 314229ab52794775e5389febf29d15ef910455a8。实际验收必须另记实现 HEAD、tree、构建参数与二进制 SHA-256。[原有协议和刷新验收](../proxy-refresh-protocol/validation.md)及[实际集成断言范围](../../../integration/README.md)继续回归，本文件不把原有用例重新编号，也不把旧通过状态移植到默认入口。
 
@@ -60,46 +60,46 @@ fixture 不导入生产 wire/protocol，也不使用与 proxy 共享的 MCP SDK 
 
 | 用例 | 最低完成阶段 | 场景与硬断言 | 状态 |
 |---|---|---|---|
-| VAL-LAUNCH-001 | L1 | 空 argv 得到 DefaultGopls 意图，后端默认 argv 恰为 [mcp]；不从请求内容猜启动方式。parseOptions 的旧 nil 错误断言替换为该断言。 | pending |
-| VAL-LAUNCH-002 | L1 | 只有合法 proxy 选项且无分隔符时进入默认模式，所有指定参数及其余默认值保持；覆盖重复 watch-root、include/exclude、时长和布尔选项。旧“合法 watch-root 但无后端必错”断言替换。 | pending |
-| VAL-LAUNCH-003 | L1 | 显式分隔符后的 program、空 argv、Unicode/空格、引号、字面 shell 字符、未知参数、help/version 和第二个分隔符逐项原样且克隆；不额外插入 mcp。显式相对路径和程序名不在参数解析时重写，实际解析回归见 015/030。 | pending |
-| VAL-LAUNCH-004 | L1 | 显式 `--`、`-- ""` 仍报缺后端，不转入默认发现。错误不依赖机器上是否装有 sibling gopls。 | pending |
-| VAL-LAUNCH-005 | L1 | 裸 mcp/version/program、其他位置参数、未知选项、非法时长、旧 gopls/workspace/replace-dir 选项均失败，给出有效迁移指引；args=[mcp] 只改 command 的配置明确不通过。 | pending |
-| VAL-LAUNCH-006 | L2 | help/-h/version 在没有 Go、没有后端、无有效项目 cwd 的受控环境下成功退出；用注入计数或外部探针证明不定位后端、不捕获运行身份、不创建 tracker、不运行 Go、不 spawn。输出限于 stderr。 | pending |
+| VAL-LAUNCH-001 | L1 | 空 argv 得到 DefaultGopls 意图，后端默认 argv 恰为 [mcp]；不从请求内容猜启动方式。parseOptions 的旧 nil 错误断言替换为该断言。 | 见[实施记录](implementation-results.md#用例状态) |
+| VAL-LAUNCH-002 | L1 | 只有合法 proxy 选项且无分隔符时进入默认模式，所有指定参数及其余默认值保持；覆盖重复 watch-root、include/exclude、时长和布尔选项。旧“合法 watch-root 但无后端必错”断言替换。 | 见[实施记录](implementation-results.md#用例状态) |
+| VAL-LAUNCH-003 | L1 | 显式分隔符后的 program、空 argv、Unicode/空格、引号、字面 shell 字符、未知参数、help/version 和第二个分隔符逐项原样且克隆；不额外插入 mcp。显式相对路径和程序名不在参数解析时重写，实际解析回归见 015/030。 | 见[实施记录](implementation-results.md#用例状态) |
+| VAL-LAUNCH-004 | L1 | 显式 `--`、`-- ""` 仍报缺后端，不转入默认发现。错误不依赖机器上是否装有 sibling gopls。 | 见[实施记录](implementation-results.md#用例状态) |
+| VAL-LAUNCH-005 | L1 | 裸 mcp/version/program、其他位置参数、未知选项、非法时长、旧 gopls/workspace/replace-dir 选项均失败，给出有效迁移指引；args=[mcp] 只改 command 的配置明确不通过。 | 见[实施记录](implementation-results.md#用例状态) |
+| VAL-LAUNCH-006 | L2 | help/-h/version 在没有 Go、没有后端、无有效项目 cwd 的受控环境下成功退出；用注入计数或外部探针证明不定位后端、不捕获运行身份、不创建 tracker、不运行 Go、不 spawn。输出限于 stderr。 | 见[实施记录](implementation-results.md#用例状态) |
 
 ### 3.2 默认定位和身份
 
 | 用例 | 最低完成阶段 | 场景与硬断言 | 状态 |
 |---|---|---|---|
-| VAL-LAUNCH-007 | L1 | 可用 sibling 存在且 PATH/cwd 有不同 gopls，绑定物理 proxy 目录中的 sibling；argv[0] 文本不能改选择。记录候选路径与选择来源。 | pending |
-| VAL-LAUNCH-008 | L3 | 从另一目录的 proxy symlink 启动实际构建二进制，选择物理目标目录中的 gopls，忽略 symlink 旁的竞争版本。另从 hardlink 启动，按可获得的当前物理路径目录选择，不虚构“原始安装目录”。 | pending |
-| VAL-LAUNCH-009 | L1 | sibling 的 Lstat 真正 ENOENT 时，按 PATH 绝对目录顺序继续；不存在候选可跳过，首个存在且可用的候选被绑定。空格/Unicode 路径作为普通路径，无 shell 解释。 | pending |
-| VAL-LAUNCH-010 | L1 | sibling 是坏 symlink 时，Lstat 的“存在”与 Stat 的 ENOENT 区分；明确报错，绝不回退到可用 PATH 候选。 | pending |
-| VAL-LAUNCH-011 | L1 | sibling 为目录/FIFO/非可执行文件，或其 Lstat/Stat/访问发生权限错误时失败；不得视作缺失或回退。执行格式等内核启动错误另由既有 backend 路径处理。 | pending |
-| VAL-LAUNCH-012 | L1 | 默认 PATH 中空组件、点目录、其他相对目录均跳过，不能将它们按 cwd 展开；仅这些位置存在 gopls 时应未找到。反例：PATH 明确包含与 cwd 相同的绝对目录时，按普通绝对项参与选择。 | pending |
-| VAL-LAUNCH-013 | L1 | PATH 第一个 Lstat 存在的 gopls 为坏链接/无权限/非可执行/目录/FIFO 时即失败，不跳到后续可用版本。访问错误同样终止；self 的完整生产拒绝另见 016。 | pending |
-| VAL-LAUNCH-014 | L2 | sibling 与所有合规 PATH 候选均不存在，或无法确定 proxy 物理路径/身份时有明确失败；不创建 tracker 扫描项目、不扫描文件系统找程序、不执行 shell/go env、不下载后端、不尝试 help 猜命令。stdout 无诊断文字。 | pending |
-| VAL-LAUNCH-015 | L1 | 单次 resolver 调用选择合法 gopls symlink 后返回绝对 locator，保留该 symlink 路径，身份检查取得的目标路径不能覆盖 locator。显式 resolveExecutable 不采用本次严格 PATH 规则；全会话只选择一次由 022 验证。 | pending |
-| VAL-LAUNCH-016 | L2 | 按可构造的路径组合覆盖直接 self、symlink self 和 hardlink self；默认 sibling、默认 PATH 首个候选、显式后端都经过生产检查，在实际 spawn 前拒绝已观察到的自身身份。不得继续搜索其他候选或生成递归 proxy。 | pending |
-| VAL-LAUNCH-017 | L2 | proxy 启动后替换其自身 locator，Guard 同时识别旧启动 inode 的 hardlink 和当前自身 locator 的新身份。任一必需身份无法读取即失败；验证失败消耗启动 attempt、不发布新 generation。 | pending |
-| VAL-LAUNCH-018 | L2 | 组件和 backend helper 测试注入独立 selfIdentity/Guard，合法使用测试可执行文件仍可启动；真实 CLI 两种模式都装配生产 Guard，无测试环境变量绕过分支。 | pending |
+| VAL-LAUNCH-007 | L1 | 可用 sibling 存在且 PATH/cwd 有不同 gopls，绑定物理 proxy 目录中的 sibling；argv[0] 文本不能改选择。记录候选路径与选择来源。 | 见[实施记录](implementation-results.md#用例状态) |
+| VAL-LAUNCH-008 | L3 | 从另一目录的 proxy symlink 启动实际构建二进制，选择物理目标目录中的 gopls，忽略 symlink 旁的竞争版本。另从 hardlink 启动，按可获得的当前物理路径目录选择，不虚构“原始安装目录”。 | 见[实施记录](implementation-results.md#用例状态) |
+| VAL-LAUNCH-009 | L1 | sibling 的 Lstat 真正 ENOENT 时，按 PATH 绝对目录顺序继续；不存在候选可跳过，首个存在且可用的候选被绑定。空格/Unicode 路径作为普通路径，无 shell 解释。 | 见[实施记录](implementation-results.md#用例状态) |
+| VAL-LAUNCH-010 | L1 | sibling 是坏 symlink 时，Lstat 的“存在”与 Stat 的 ENOENT 区分；明确报错，绝不回退到可用 PATH 候选。 | 见[实施记录](implementation-results.md#用例状态) |
+| VAL-LAUNCH-011 | L1 | sibling 为目录/FIFO/非可执行文件，或其 Lstat/Stat/访问发生权限错误时失败；不得视作缺失或回退。执行格式等内核启动错误另由既有 backend 路径处理。 | 见[实施记录](implementation-results.md#用例状态) |
+| VAL-LAUNCH-012 | L1 | 默认 PATH 中空组件、点目录、其他相对目录均跳过，不能将它们按 cwd 展开；仅这些位置存在 gopls 时应未找到。反例：PATH 明确包含与 cwd 相同的绝对目录时，按普通绝对项参与选择。 | 见[实施记录](implementation-results.md#用例状态) |
+| VAL-LAUNCH-013 | L1 | PATH 第一个 Lstat 存在的 gopls 为坏链接/无权限/非可执行/目录/FIFO 时即失败，不跳到后续可用版本。访问错误同样终止；self 的完整生产拒绝另见 016。 | 见[实施记录](implementation-results.md#用例状态) |
+| VAL-LAUNCH-014 | L2 | sibling 与所有合规 PATH 候选均不存在，或无法确定 proxy 物理路径/身份时有明确失败；不创建 tracker 扫描项目、不扫描文件系统找程序、不执行 shell/go env、不下载后端、不尝试 help 猜命令。stdout 无诊断文字。 | 见[实施记录](implementation-results.md#用例状态) |
+| VAL-LAUNCH-015 | L1 | 单次 resolver 调用选择合法 gopls symlink 后返回绝对 locator，保留该 symlink 路径，身份检查取得的目标路径不能覆盖 locator。显式 resolveExecutable 不采用本次严格 PATH 规则；全会话只选择一次由 022 验证。 | 见[实施记录](implementation-results.md#用例状态) |
+| VAL-LAUNCH-016 | L2 | 按可构造的路径组合覆盖直接 self、symlink self 和 hardlink self；默认 sibling、默认 PATH 首个候选、显式后端都经过生产检查，在实际 spawn 前拒绝已观察到的自身身份。不得继续搜索其他候选或生成递归 proxy。 | 见[实施记录](implementation-results.md#用例状态) |
+| VAL-LAUNCH-017 | L2 | proxy 启动后替换其自身 locator，Guard 同时识别旧启动 inode 的 hardlink 和当前自身 locator 的新身份。任一必需身份无法读取即失败；验证失败消耗启动 attempt、不发布新 generation。 | 见[实施记录](implementation-results.md#用例状态) |
+| VAL-LAUNCH-018 | L2 | 组件和 backend helper 测试注入独立 selfIdentity/Guard，合法使用测试可执行文件仍可启动；真实 CLI 两种模式都装配生产 Guard，无测试环境变量绕过分支。 | 见[实施记录](implementation-results.md#用例状态) |
 
 ### 3.3 固定定位、升级与零参数刷新
 
 | 用例 | 最低完成阶段 | 场景与硬断言 | 状态 |
 |---|---|---|---|
-| VAL-LAUNCH-019 | L3 | 首次选择的 locator 在后续 spawn 前原子替换为另一合法 fixture 二进制，或 symlink 换到合法目标；两份 fixture 的初始化信息、目录及状态满足既有会话恢复条件，同一前端连接中下一次既有刷新使用新映像与新 boot。仅改二进制不要求立即触发刷新，测试另改已监测输入。协议约定不兼容时仍按既有规则重连，不要求本用例强行保持会话。 | pending |
-| VAL-LAUNCH-020 | L3 | 正常启动后把同一 locator 改为 proxy 本身、proxy symlink 或 hardlink，再触发刷新；Guard 在执行前拒绝，不递归启动、不切换到其他 PATH 版本、不返回旧代次成功、不重放已派发业务。 | pending |
-| VAL-LAUNCH-021 | L3 | 后续 locator 被删除、改为坏链接/无执行位/非法类型，或校验所需路径不可访问时，沿用既有有界恢复与清理；不重新发现后端。恢复窗口内修复原 locator 后，后续合法尝试可按既有恢复契约成功。 | pending |
-| VAL-LAUNCH-022 | L3 | 首次经 PATH 绑定后再加入优先 sibling/更前 PATH 候选，或修改调用方持有的原始 cfg/env/argv 切片，后续 spawn 仍使用固定绝对 locator 和快照。重启整个 proxy 后才重新发现。 | pending |
-| VAL-LAUNCH-023 | L3 | 真构建 proxy 与名为 gopls 的独立 fixture 放在 sibling 布局，实际无参数启动 proxy；后端恰收 [mcp]，初始化/工具发现/工具调用走实际 stdio。无显式后端、无默认后端环境覆盖。 | pending |
-| VAL-LAUNCH-024 | L3 | sibling 确实不存在，在绝对 PATH 布局重复实际零参数全链路；证明运行的是预期候选，且没有替代成旧显式 harness。 | pending |
-| VAL-LAUNCH-025 | L3 | 只有合法 proxy 选项的入口实际启动默认后端；watch-root 增加监测范围而不 chdir、不改变 mcp argv；include/exclude 和 GoDiscovery 显式选择维持原语义。此例不作为无参数/三行 Codex 通过证据。 | pending |
-| VAL-LAUNCH-026 | L0 | 独立 fixture 自证：直接同 PID 运行，磁盘 A→B 后仍返回 A，输入读取次数固定为启动一次；新 PID 才返回 B。新默认入口 fixture 和原 helper 的复用不能破坏该性质。 | pending |
-| VAL-LAUNCH-027 | L3 | 无参数 proxy 通过不自刷新 fixture 检验 .go 与四类依赖文件至少连续两次变化，含等长内容及恢复 mtime；同一 proxy PID/前端连接、新 backend boot/PID、新快照与每 boot 单次读取相符。已派发阻塞请求遇刷新不自动 replay，以独立执行次数判定。 | pending |
-| VAL-LAUNCH-028 | L3 | 默认入口继承安全合成 env 和 cwd，不因安装目录推断项目、不改 GOWORK/工具链选择；GoDiscovery 默认为 false，不调用 Go 发现。默认扫描范围与 home/root 拒绝保持，外部 replace/use 输入不虚构覆盖；MCP roots 继续来自客户端。 | pending |
-| VAL-LAUNCH-029 | L3 | 新启动/错误日志只到 stderr，stdout 保持原始协议帧；使用未知字段、schema、字符串/数字 ID 与后端错误的现有断言检查装配未改正文。错误日志不包含完整 env 或任意显式 argv。 | pending |
-| VAL-LAUNCH-030 | L2 | 原有 CLI、backend、workspace、raw 协议测试全部按原断言回归，除 001/002 指定旧错误断言外不削弱。覆盖显式路径、symlink 升级、boot attempt、取消、FIFO/摘要、清理、反向请求、版本恢复、长期状态和已派发请求不重放。 | pending |
+| VAL-LAUNCH-019 | L3 | 首次选择的 locator 在后续 spawn 前原子替换为另一合法 fixture 二进制，或 symlink 换到合法目标；两份 fixture 的初始化信息、目录及状态满足既有会话恢复条件，同一前端连接中下一次既有刷新使用新映像与新 boot。仅改二进制不要求立即触发刷新，测试另改已监测输入。协议约定不兼容时仍按既有规则重连，不要求本用例强行保持会话。 | 见[实施记录](implementation-results.md#用例状态) |
+| VAL-LAUNCH-020 | L3 | 正常启动后把同一 locator 改为 proxy 本身、proxy symlink 或 hardlink，再触发刷新；Guard 在执行前拒绝，不递归启动、不切换到其他 PATH 版本、不返回旧代次成功、不重放已派发业务。 | 见[实施记录](implementation-results.md#用例状态) |
+| VAL-LAUNCH-021 | L3 | 后续 locator 被删除、改为坏链接/无执行位/非法类型，或校验所需路径不可访问时，沿用既有有界恢复与清理；不重新发现后端。恢复窗口内修复原 locator 后，后续合法尝试可按既有恢复契约成功。 | 见[实施记录](implementation-results.md#用例状态) |
+| VAL-LAUNCH-022 | L3 | 首次经 PATH 绑定后再加入优先 sibling/更前 PATH 候选，或修改调用方持有的原始 cfg/env/argv 切片，后续 spawn 仍使用固定绝对 locator 和快照。重启整个 proxy 后才重新发现。 | 见[实施记录](implementation-results.md#用例状态) |
+| VAL-LAUNCH-023 | L3 | 真构建 proxy 与名为 gopls 的独立 fixture 放在 sibling 布局，实际无参数启动 proxy；后端恰收 [mcp]，初始化/工具发现/工具调用走实际 stdio。无显式后端、无默认后端环境覆盖。 | 见[实施记录](implementation-results.md#用例状态) |
+| VAL-LAUNCH-024 | L3 | sibling 确实不存在，在绝对 PATH 布局重复实际零参数全链路；证明运行的是预期候选，且没有替代成旧显式 harness。 | 见[实施记录](implementation-results.md#用例状态) |
+| VAL-LAUNCH-025 | L3 | 只有合法 proxy 选项的入口实际启动默认后端；watch-root 增加监测范围而不 chdir、不改变 mcp argv；include/exclude 和 GoDiscovery 显式选择维持原语义。此例不作为无参数/三行 Codex 通过证据。 | 见[实施记录](implementation-results.md#用例状态) |
+| VAL-LAUNCH-026 | L0 | 独立 fixture 自证：直接同 PID 运行，磁盘 A→B 后仍返回 A，输入读取次数固定为启动一次；新 PID 才返回 B。新默认入口 fixture 和原 helper 的复用不能破坏该性质。 | 见[实施记录](implementation-results.md#用例状态) |
+| VAL-LAUNCH-027 | L3 | 无参数 proxy 通过不自刷新 fixture 检验 .go 与四类依赖文件至少连续两次变化，含等长内容及恢复 mtime；同一 proxy PID/前端连接、新 backend boot/PID、新快照与每 boot 单次读取相符。已派发阻塞请求遇刷新不自动 replay，以独立执行次数判定。 | 见[实施记录](implementation-results.md#用例状态) |
+| VAL-LAUNCH-028 | L3 | 默认入口继承安全合成 env 和 cwd，不因安装目录推断项目、不改 GOWORK/工具链选择；GoDiscovery 默认为 false，不调用 Go 发现。默认扫描范围与 home/root 拒绝保持，外部 replace/use 输入不虚构覆盖；MCP roots 继续来自客户端。 | 见[实施记录](implementation-results.md#用例状态) |
+| VAL-LAUNCH-029 | L3 | 新启动/错误日志只到 stderr，stdout 保持原始协议帧；使用未知字段、schema、字符串/数字 ID 与后端错误的现有断言检查装配未改正文。错误日志不包含完整 env 或任意显式 argv。 | 见[实施记录](implementation-results.md#用例状态) |
+| VAL-LAUNCH-030 | L2 | 原有 CLI、backend、workspace、raw 协议测试全部按原断言回归，除 001/002 指定旧错误断言外不削弱。覆盖显式路径、symlink 升级、boot attempt、取消、FIFO/摘要、清理、反向请求、版本恢复、长期状态和已派发请求不重放。 | 见[实施记录](implementation-results.md#用例状态) |
 
 VAL-LAUNCH-027 的独立因果是本次默认入口增量的核心。旧协议套件对漏 watcher 事件、轮询、ID 复用、取消和长期状态等仍为必需回归；本次不重复编写全部历史协议用例，也不能因默认入口测试通过而停跑这些套件。
 
@@ -107,12 +107,12 @@ VAL-LAUNCH-027 的独立因果是本次默认入口增量的核心。旧协议�
 
 | 用例 | 最低完成阶段 | 场景与硬断言 | 状态 |
 |---|---|---|---|
-| VAL-LAUNCH-031 | L3 | 在记录版本的真实 gopls v0.24.0 布局中无参数启动 proxy；与合法原生 gopls mcp 控制比较稳定 tools/list 并调用已支持工具。gopls 路径只用于安装准备，运行时不作为额外 backend env/argv 注入。 | pending |
-| VAL-LAUNCH-032 | L3 | 默认无参数入口运行 protobuf 1.34.2→1.35.2→1.36.6 和 .go 内容变更，保持同一前端连接/proxy PID，工具结果含预期版本内容并记录换代。结论限真实互通；独立刷新正确性仍引用 026/027。 | pending |
-| VAL-LAUNCH-033 | L4 | 真实 Codex 使用独立合法原生控制配置 command=gopls、args=[mcp]，在相同项目 cwd/环境发现并调用工具。登记客户端与后端版本、实际生效设置；不得用裸 gopls 作为已工作的原生控制。 | pending |
-| VAL-LAUNCH-034 | L4 | 真实 Codex 用题述无 args 目标配置，只把 command 改成 proxy；目标条目只显式声明两键，合并后无 args/env/env_vars/cwd/timeout 覆盖。验证发现、调用、受监测内容变化后的调用及同一 proxy 会话；留存配置差异和实际 argv。缺客户端或真实证据时保持 pending。 | pending |
-| VAL-LAUNCH-035 | L4 | 在 034 原封不动的目标配置下分别测量冷启动/首次扫描/后端启动/initialize/tools-list/普通调用/刷新后调用；记录实际 Codex 默认启动 10s、工具 60s 与 proxy 内部预算。冷暖分开，超时不加配置伪装通过，不减内容校验换速度。 | pending |
-| VAL-LAUNCH-036 | L4 | Linux/macOS、Go 1.25.x/1.27.2 的既有矩阵实际选中增量测试，真实工具行使用 gopls v0.24.0；保留 race、只读 CI、persist-credentials:false 和证据上传。以 JSON 确认运行而非静默 skip，并把 HEAD/tree/hash/平台/attempt 与所有结论对应；真实 Codex 状态独立保留。 | pending |
+| VAL-LAUNCH-031 | L3 | 在记录版本的真实 gopls v0.24.0 布局中无参数启动 proxy；与合法原生 gopls mcp 控制比较稳定 tools/list 并调用已支持工具。gopls 路径只用于安装准备，运行时不作为额外 backend env/argv 注入。 | 见[实施记录](implementation-results.md#用例状态) |
+| VAL-LAUNCH-032 | L3 | 默认无参数入口运行 protobuf 1.34.2→1.35.2→1.36.6 和 .go 内容变更，保持同一前端连接/proxy PID，工具结果含预期版本内容并记录换代。结论限真实互通；独立刷新正确性仍引用 026/027。 | 见[实施记录](implementation-results.md#用例状态) |
+| VAL-LAUNCH-033 | L4 | 真实 Codex 使用独立合法原生控制配置 command=gopls、args=[mcp]，在相同项目 cwd/环境发现并调用工具。登记客户端与后端版本、实际生效设置；不得用裸 gopls 作为已工作的原生控制。 | 见[实施记录](implementation-results.md#用例状态) |
+| VAL-LAUNCH-034 | L4 | 真实 Codex 用题述无 args 目标配置，只把 command 改成 proxy；目标条目只显式声明两键，合并后无 args/env/env_vars/cwd/timeout 覆盖。验证发现、调用、受监测内容变化后的调用及同一 proxy 会话；留存配置差异和实际 argv。缺客户端或真实证据时保持 pending。 | 见[实施记录](implementation-results.md#用例状态) |
+| VAL-LAUNCH-035 | L4 | 在 034 原封不动的目标配置下分别测量冷启动/首次扫描/后端启动/initialize/tools-list/普通调用/刷新后调用；记录实际 Codex 默认启动 10s、工具 60s 与 proxy 内部预算。冷暖分开，超时不加配置伪装通过，不减内容校验换速度。 | 见[实施记录](implementation-results.md#用例状态) |
+| VAL-LAUNCH-036 | L4 | Linux/macOS、Go 1.25.x/1.27.2 的既有矩阵实际选中增量测试，真实工具行使用 gopls v0.24.0；保留 race、只读 CI、persist-credentials:false 和证据上传。以 JSON 确认运行而非静默 skip，并把 HEAD/tree/hash/平台/attempt 与所有结论对应；真实 Codex 状态独立保留。 | 见[实施记录](implementation-results.md#用例状态) |
 
 ## 4. 真实 Codex 的具体执行契约
 
@@ -183,5 +183,5 @@ command = "/Users/you/go/bin/gopls-mcp-proxy"
 
 自动化平台矩阵保持 Linux Go 1.25.x、Linux Go 1.27.2、macOS Go 1.27.2；后两行安装真实 gopls v0.24.0。基线 CI 只选 `^TestRaw` 和 `^TestRealGopls`，新集成命名应落入选择器，或同步调整选择器并验证实际 JSON 结果。必需 fixture 测试不能因缺 gopls 而 skip；专用真实后端 CI 缺二进制/依赖或下载失败应失败。平台权限、硬链接能力等缺失必须记录，不能以某个平台的组件模拟替代另一个平台完整通过。
 
-新增入口代码可按已经通过的工程验证单独合入，但产品结论必须保留实际状态。没有 VAL-LAUNCH-034、035 的真实 Codex 证据时，写“默认入口代码已验证，Codex 目标验收 pending/blocked”，不能写“只改 command 已完全完成”。将来可声明的范围应列明实际通过的平台、客户端/后端版本、项目条件和默认预算；本次文档 PR 不产生任何运行成功或发布声明。
+新增入口代码可按已经通过的工程验证单独合入，但产品结论必须保留实际状态。没有 VAL-LAUNCH-034、035 的真实 Codex 证据时，写“默认入口代码已验证，Codex 目标验收 pending/blocked”，不能写“只改 command 已完全完成”。将来可声明的范围应列明实际通过的平台、客户端/后端版本、项目条件和默认预算；本次实现的实际结果见[实施记录](implementation-results.md)，没有创建新 Release。
 

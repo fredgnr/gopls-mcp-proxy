@@ -1,6 +1,6 @@
 # 默认 gopls 启动入口：Codex 只修改 command
 
-状态：**Proposed**。日期：2026-10-19。本次提交只包含技术方案；新的默认启动入口、运行时测试及 Codex 验收均为 **pending**。
+状态：**入口已实现，分层验收进行中**。方案日期：2026-10-19；实施日期：2026-10-20。默认启动器、逐次身份检查和自动化测试已落地；平台与真实 Codex 的实际结果见[实施记录](implementation-results.md)。
 
 实现基线为 [dc9821f76228985333aa590bb1705149d1ba2061](https://github.com/fredgnr/gopls-mcp-proxy/commit/dc9821f76228985333aa590bb1705149d1ba2061)，tree 为 314229ab52794775e5389febf29d15ef910455a8。该基线已经实现 proxy 独立刷新与原始 MCP 中继，但 CLI 仍要求显式指定后端。
 
@@ -16,7 +16,7 @@ command = "/Users/you/go/bin/gopls-mcp-proxy"
 
 相对于题述配置，只把 command 从原生 gopls 路径改成代理路径；该 MCP 条目仍只显式设置 command 和 default_tools_approval_mode，不要求增加 args、env、cwd 或超时配置。代理选择同目录的 gopls，必要时从继承的 PATH 查找，默认启动 `gopls mcp`。原生 gopls 文件应保留。
 
-这是本方案实施后的目标配置，**当前基线无参数启动仍会报错**。当前可用的显式形式见[现有运行说明](../../../README.md)。
+本文对应的源码已实现该入口；旧基线和旧 Release 无参数启动仍会报错。默认与显式形式见[运行说明](../../../README.md)。配置能力和真实客户端验收仍分别记录。
 
 ## 适用条件与边界
 
@@ -36,6 +36,7 @@ command = "/Users/you/go/bin/gopls-mcp-proxy"
 |---|---|
 | [技术设计](design.md) | CLI 模式、默认后端定位、自身身份检查、工作目录、预算和兼容边界 |
 | [实施计划](implementation-plan.md) | 分阶段任务、依赖、文件归属、子代理协作与完成条件 |
+| [实施记录](implementation-results.md) | 实际代码、测试结果、证据位置与未完成验收 |
 | [验收计划](validation.md) | 参数和路径用例、无自刷新后端、真实 gopls、真实 Codex 与证据规则 |
 
 ## 主要决策
@@ -49,6 +50,6 @@ command = "/Users/you/go/bin/gopls-mcp-proxy"
 
 ## 与既有方案的关系
 
-[独立刷新与协议兼容方案](../proxy-refresh-protocol/README.md)及[当前运行设计](../../design.md)仍是协议与刷新核心的基线。本提案只计划扩展“必须显式提供后端”的 CLI 条件，并增加启动前的文件身份检查。历史实施记录和通过结果保留原含义。
+[独立刷新与协议兼容方案](../proxy-refresh-protocol/README.md)及[当前运行设计](../../design.md)仍是协议与刷新核心的基线。此次实现只扩展“必须显式提供后端”的 CLI 条件，并增加启动前的文件身份检查。历史实施记录和通过结果保留原含义。
 
-实施完成后，应更新当前 README、运行设计、验证范围及打包说明，并登记实际验证提交。文档 PR、既有 CI 或交叉编译成功，都不代表默认入口和真实 Codex 验收已完成。
+README、运行设计、验证范围和打包说明已同步更新。当前提交的自动化与客户端结论见[实施记录](implementation-results.md)；历史 CI 和交叉编译不代替实际运行。

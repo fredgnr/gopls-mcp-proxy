@@ -64,3 +64,27 @@ GOPLS_INTEGRATION=1 GOPLS_BIN=/absolute/path/to/gopls \
 分页组合、所有进程后代/背压组合和性能分位数。
 其中帧短写、扫描根/符号链接、协议字段、目录恢复与进程生命周期还有对应模块
 单元测试；完整设计门禁仍需结合实际运行结果逐项判断。
+
+## 默认启动入口的增量测试
+
+`default_launcher_test.go` 与 `default_launcher_boundary_test.go` 使用编译后的 proxy 和
+`testdata/default-gopls` 独立程序。该程序只接受 `[mcp]`，复用 stdlib 实现的只读一次夹具，
+没有给生产 resolver 增加环境覆盖或测试开关。真正零参数用例保持全部生产默认值；
+带 watch-root/include/exclude/GoDiscovery 的用例明确属于仅代理选项模式。
+
+覆盖实际安装布局、原始协议字段、五类输入连续两次等长同 mtime 修改、已派发阻塞请求不重放、
+固定 PATH locator、原路径文件/symlink 升级、坏路径修复、默认恢复窗口耗尽、代理启动与当前
+两份身份，以及 home/root 和本地诊断边界。直接 fixture 的负向对照先证明后端不自刷新。
+
+```sh
+go test -race -json ./integration -run '^TestRawDefaultLauncher' -count=1 > /tmp/default-launcher.json
+python3 scripts/check-launcher-tests.py raw /tmp/default-launcher.json
+GOPLS_INTEGRATION=1 GOPLS_BIN=/absolute/path/to/gopls \
+  go test -json ./integration -run '^TestRealGopls' -count=1 > /tmp/real-gopls.json
+python3 scripts/check-launcher-tests.py real /tmp/real-gopls.json
+```
+
+真实默认入口将固定 v0.24.0 gopls 与 proxy 放在 sibling 布局，运行时不传入后端路径或代理参数。
+保留原显式互通测试；两者均比较完整工具目录并运行两次 protobuf 升级及四种源码变化。
+默认入口还保留 application-exchanges.jsonl（应用请求/响应，不声称含所有反向请求）。
+实际执行状态、Codex 客户端结果和剩余限制见[实施记录](../docs/changes/default-gopls-launcher/implementation-results.md)。

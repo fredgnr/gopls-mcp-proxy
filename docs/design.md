@@ -16,6 +16,7 @@ flowchart TD
 | 模块 | 职责 | 不承担的职责 |
 |---|---|---|
 | `cmd/gopls-mcp-proxy` | 参数边界、cwd/env、信号、stdio 入口 | 解析后端参数或改变 MCP roots |
+| `internal/launcher` | 默认 gopls 定位、启动与当前自身身份、候选检查 | 工具业务、项目发现、协议解析 |
 | `internal/backend` | 定位程序、原始管道、boot ID、映像摘要、进程组与 Wait | MCP 初始化、工具发现、业务重试 |
 | `internal/wire` | 换行帧、原始 JSON、typed ID、精确字段改写 | 工具 schema 或参数解释 |
 | `internal/protocol` | 各修订的关联字段、batch、取消、MRTR/订阅形状、代理错误 | 协议跨版本翻译 |
@@ -23,6 +24,14 @@ flowchart TD
 | `internal/proxy` | 请求账本、代次发布、背压、失效与状态恢复 | 推测工具副作用或重放业务调用 |
 
 默认通用路径不需要 MCP SDK，也不需要运行 `go env`。Go 依赖解析仅在显式 `--go-discovery` 下启用。
+
+## 默认启动入口
+
+无参数或仅合法代理选项选择 `gopls mcp`；显式 `-- program argv` 保持通用解析。CLI 先处理 help/version 和参数错误，再捕获 cwd/env、自身物理路径及文件身份。默认 resolver 只查物理目录 sibling 和绝对 PATH 项：首个 Lstat 存在的候选绑定，坏链接/不可执行/自身别名明确失败。定位或初始身份检查失败在 tracker 创建之前返回。
+
+`backend.Config.BeforeStart` 由生产 CLI 在两种模式中注入，逐次执行前重新检查固定 locator。它同时比较代理启动时 inode 和当前自身路径的身份；检查失败消耗 boot attempt，关闭新管道，不发布新进程。通用 backend 测试可注入独立身份，不存在生产环境变量绕过检查的入口。
+
+定位路径保留后端 symlink，以允许原路径升级；后续损坏不触发重新发现。默认值、监测范围、Go discovery 和协议策略未变。完整契约见[默认入口设计](changes/default-gopls-launcher/design.md)，分层运行结果见[实施结果](changes/default-gopls-launcher/implementation-results.md)。
 
 ## 输入检查点
 

@@ -8,48 +8,60 @@
 
 ## 安装与运行
 
-代理源码要求 Go 1.25 或更新版本。代理自身不执行 `go env`，包装非 Go 后端时也不要求安装 Go；运行 gopls 时仍需满足 gopls 自身的运行要求。以下新 CLI 对应此源码版本；此前已发布包请参照其随包 README，不能假定旧 tag 包含本次改造。
+代理源码要求 Go 1.25 或更新版本。代理自身不执行 `go env`，包装非 Go 后端时也不要求安装 Go；运行 gopls 时仍需满足 gopls 自身的运行要求。以下 CLI 对应此源码版本；旧 Release 不会自动获得新能力。
 
 ```sh
 go install github.com/fredgnr/gopls-mcp-proxy/cmd/gopls-mcp-proxy@main
 
 cd /absolute/path/to/project
-gopls-mcp-proxy -- /absolute/path/to/gopls mcp
+gopls-mcp-proxy
 ```
 
-命令边界固定为：
+无参数，或只有合法代理选项时，默认启动 `gopls mcp`。请保留原生 gopls，把它与代理放在同一目录最直观；代理也可以从继承的 PATH 中查找。
 
 ```text
+gopls-mcp-proxy [代理选项]
 gopls-mcp-proxy [代理选项] -- 程序 [原始参数...]
 ```
 
-`--` 后必须提供程序。其后的空参数、空格、中文、引号、`--help`、`--version` 和 shell 字符都按原始 argv 传入，不再由代理解析，也不拼接为 shell 命令。程序需要提供 MCP stdio；普通文本 stdout 子命令不属于协议代理的支持范围。
+默认查找以代理实际可执行文件的物理目录为准：通过符号链接启动时取链接目标目录；通过硬链接启动时取本次可获得的自身路径目录。只有同目录 gopls 确实不存在才搜索 PATH，并只考虑绝对目录。第一个存在的候选若是坏链接、目录、无执行位或指向代理自身，会明确失败，不静默换用其他版本。空 PATH 项、`.` 和相对目录不会参与默认搜索。
 
-工作目录和环境由调用方设置。`--watch-root` 只增加输入监测范围，不切换 cwd，也不替客户端声明 MCP roots。程序路径通过启动时的 PATH 或显式路径解析，并固定为绝对定位路径；环境和参数在一次代理运行期间保持不变。下一次受控启动会读取该路径的新映像，允许符号链接目标或二进制被升级；代理不会单独监听二进制升级事件。
+显式 `--` 后必须提供程序。其后的空参数、空格、中文、引号、`--help`、`--version` 和 shell 字符都按原始 argv 传入，不再由代理解析，也不拼接为 shell 命令。显式程序名与相对路径保持原解析规则，适合包装其他 MCP stdio 后端：
+
+```sh
+gopls-mcp-proxy -- /absolute/path/to/gopls mcp
+```
+
+工作目录和环境由调用方设置。安装目录不是项目目录；`--watch-root` 只增加输入范围，不切换 cwd，也不替客户端声明 MCP roots。默认不会自动监测 cwd 外的 replace/use 目录；需要这些输入时请添加 watch root。
+
+程序定位路径在一次代理运行中固定为绝对路径，环境和参数也固定。每次启动前检查后端与代理自身的启动身份、当前文件身份，拒绝直接、符号链接或硬链接指向自身。原路径上的正常二进制替换或符号链接升级允许在下次已有刷新时生效；删除、损坏或改指自身会进入既有有界恢复，不重新搜索后端。该检查不消除文件检查到执行之间的竞态，也不识别任意包装脚本的间接循环。
 
 帮助、版本、代理日志和后端 stderr 均写入 stderr；stdout 只输出 MCP 帧。客户端 EOF、SIGINT 和 SIGTERM 会触发后端清理。
 
-Codex 配置示例：
+### Codex 配置
+
+没有 `args` 的 MCP 条目可以使用默认入口：
+
+```toml
+[mcp_servers.gopls]
+default_tools_approval_mode = "approve"
+command = "/Users/you/go/bin/gopls-mcp-proxy"
+```
+
+该模板要求 Codex 实际从项目目录启动进程，原生 gopls/Go 已安装，所需输入位于默认监测范围内。工程测试与真实 Codex 的实际验收状态分别记录在[默认入口实施结果](docs/changes/default-gopls-launcher/implementation-results.md)。客户端默认超时与代理内部预算分别生效，未经验证的大项目不在保证范围内。
+
+原生 gopls 的标准 MCP 配置是 `command=gopls`、`args=["mcp"]`。已有该配置时，改用代理默认入口还需要删除 `args`；保留裸 `mcp` 会得到迁移提示。显式通用入口也仍可用：
 
 ```toml
 [mcp_servers.gopls]
 command = "/Users/you/go/bin/gopls-mcp-proxy"
-args = [
-  "--watch-root", "/Users/you/projects/shared",
-  "--debounce", "500ms",
-  "--request-timeout", "110s",
-  "--", "/Users/you/go/bin/gopls", "mcp"
-]
+args = ["--watch-root", "/Users/you/projects/shared", "--", "/Users/you/go/bin/gopls", "mcp"]
 cwd = "/Users/you/projects/my-project"
 startup_timeout_sec = 60
 tool_timeout_sec = 120
 ```
 
-客户端超时应留出代理排队、扫描和恢复的时间。代理自己的版本仅用于诊断和打包，不会替换原生 `serverInfo` 或 `clientInfo`。
-
-### 默认启动入口提案
-
-让没有 `args` 的 Codex 配置只修改 `command`，由代理自动定位并启动 `gopls mcp`，见[默认 gopls 启动方案](docs/changes/default-gopls-launcher/README.md)。该方案状态为 **Proposed**；当前版本仍需按上述显式形式指定后端，新的默认入口与 Codex 验收尚未实施。
+这份扩展配置明确增加了 cwd、输入范围和超时，不属于“只改 command”的配置验收。代理自己的版本仅用于诊断和打包，不会替换原生 `serverInfo` 或 `clientInfo`。
 
 ### 从旧命令迁移
 
@@ -64,7 +76,7 @@ cd /src/app
 gopls-mcp-proxy --watch-root ../shared -- /opt/bin/gopls mcp
 ```
 
-MCP 配置中将旧 `--workspace` 移到客户端的 `cwd` 配置，将额外目录改为 `--watch-root`，并显式写出后端程序及 `mcp` 参数。
+MCP 配置中将旧 `--workspace` 移到客户端的 `cwd` 配置，将额外目录改为 `--watch-root`，；需要指定其他后端时使用显式 `-- program argv`。
 
 ## 输入监测与刷新
 
@@ -168,7 +180,7 @@ CI 分别执行组件 race 测试、必跑 raw 协议/刷新测试、真实 gopl
 
 ## 二进制与发布
 
-[GitHub Releases](https://github.com/fredgnr/gopls-mcp-proxy/releases) 的构建目标为 `darwin_arm64`、`darwin_amd64`、`linux_amd64`、`linux_arm64`。每个包包含代理、README 和 `BUILDINFO`，同时提供 `checksums.txt`。macOS 可用 `shasum -a 256`、Linux 可用 `sha256sum` 核对下载包。包内不包含 gopls。
+[GitHub Releases](https://github.com/fredgnr/gopls-mcp-proxy/releases) 的构建目标为 `darwin_arm64`、`darwin_amd64`、`linux_amd64`、`linux_arm64`。每个包包含代理、README 和 `BUILDINFO`，同时提供 `checksums.txt`。macOS 可用 `shasum -a 256`、Linux 可用 `sha256sum` 核对下载包。包内不包含 gopls。使用默认入口时将原生 gopls 保留在代理旁边，或放在 PATH 的绝对目录中；不要把代理覆盖为原生 gopls 文件。
 
 版本 tag 的发布流程先完成 CI 和四目标构建，再创建 draft、上传附件并公开；已公开版本不覆盖。普通分支和 PR 只生成保留 14 天的 `release-dist` artifact。验证和构建使用只读权限，checkout 保持 `persist-credentials: false`；只有现有 tag 发布任务具有发布权限。本次改造不自动创建 tag 或 Release。
 
