@@ -66,7 +66,7 @@ CI 保留 Linux/macOS、最低 Go 1.25、Go 1.27.2、固定 gopls v0.24.0、race
 
 CI 使用 `contents: read`，checkout 为 `persist-credentials: false`，不使用 `pull_request_target`。本次验证配置不增加 tag、Release 或发布权限。
 
-本次开发的最终提交、命令结果和远端 Actions 链接由[实施记录](changes/proxy-refresh-protocol/implementation-plan.md)及同目录验收记录统一登记。本文不预先宣布尚未运行的最终 Linux/macOS 矩阵通过。
+本次开发的最终提交、命令结果和远端 Actions 链接由[默认入口实施记录](changes/default-gopls-launcher/implementation-results.md)与所链接的 PR/CI 统一登记。本文不预先宣布尚未运行的最终 Linux/macOS 矩阵通过。
 
 ## 明确限制
 
@@ -75,3 +75,11 @@ CI 使用 `contents: read`，checkout 为 `persist-credentials: false`，不使�
 - Linux 本地结果不能替代 macOS Actions，也不能替代最终提交的测试。四架构交叉构建不是四架构运行验收。
 - Unix 进程组清理覆盖受管理后代；自行脱离进程组的外部守护程序不在此进程树管理保证内。Windows 未列为运行支持平台。
 - 不提供文件系统事务或副作用回滚；未知业务状态、完全未观察到的短暂文件变化不承诺恢复或检测。
+
+## 默认 gopls 启动入口
+
+新增 `internal/launcher` 定位/身份组件、CLI 默认意图和 `backend.Config.BeforeStart` 的逐次检查。独立夹具用真正构建的 proxy 与名为 gopls 的程序建立 sibling/PATH/symlink/hardlink 布局，无参数经过生产入口，覆盖输入刷新、合法升级、固定路径损坏/修复与自身身份变化。路径与权限失败的组件断言明确使用注入系统调用错误，不把 root 下未触发的 chmod 错误当作证据。
+
+`integration/default_launcher*_test.go` 对应必跑 raw suite；`TestRealGoplsDefaultLauncherTwoProtobufUpgrades` 是独立的真实后端默认入口，原显式测试仍保留。`scripts/check-launcher-tests.py` 从 JSON 确认每个新增入口用例实际运行并通过，缺失、失败或 skip 均使对应 CI 步骤失败。
+
+平台、提交 tree、工作树、Go 版本、run/attempt 和权限身份写入 `source.json`；安装路径、argv、PID、二进制哈希及原始轨迹归档在监测树外。当前结果与 36 项用例映射见[默认入口实施记录](changes/default-gopls-launcher/implementation-results.md)。真实 gopls 不代替独立刷新因果，raw harness 不代替真实 Codex。

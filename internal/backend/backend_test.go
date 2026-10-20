@@ -18,6 +18,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/fredgnr/gopls-mcp-proxy/internal/launcher"
 )
 
 // No MCP SDK or handshake is involved: the process layer transports arbitrary
@@ -270,5 +272,186 @@ func TestExecutableLocatorAcceptsSymlinkUpgrade(t *testing.T) {
 	}
 	if p.Digest == q.Digest {
 		t.Fatal("new image digest not observed")
+	}
+}
+
+func TestBeforeStartChecksEachAttemptAfterCleanup(t *testing.T) {
+	cfg := helperConfig(t, "echo", "original")
+	cfg.Env = append(os.Environ(), "RAW_BACKEND_TEST=frozen")
+	wantLocator := cfg.Executable
+	wantWorkspace := cfg.Workspace
+	denied := errors.New("identity no longer allowed")
+	allow := true
+	checks := 0
+	cfg.BeforeStart = func(ctx context.Context, locator string) error {
+		checks++
+		if locator != wantLocator || ctx.Err() != nil {
+			t.Fatalf("guard received locator=%q, context error=%v", locator, ctx.Err())
+		}
+		if !allow {
+			return denied
+		}
+		return nil
+	}
+	f, err := NewFactory(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.Locator() != wantLocator {
+		t.Fatalf("fixed locator=%q, want %q", f.Locator(), wantLocator)
+	}
+	// All launch inputs, including the installed hook, were captured already.
+	cfg.Executable = "/does-not-exist"
+	cfg.Workspace = "/does-not-exist"
+	cfg.Args[len(cfg.Args)-1] = "mutated"
+	cfg.Env[len(cfg.Env)-1] = "RAW_BACKEND_TEST=mutated"
+	cfg.BeforeStart = func(context.Context, string) error { t.Fatal("mutated hook ran"); return nil }
+	checkInvocation := func(p *Process) {
+		t.Helper()
+		var got struct {
+			Args []string
+			Cwd  string
+			Env  string
+		}
+		if err := json.Unmarshal([]byte(line(t, p)), &got); err != nil {
+			t.Fatal(err)
+		}
+		physicalCWD, err := filepath.EvalSymlinks(wantWorkspace)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(got.Args, []string{"original"}) || got.Cwd != physicalCWD || got.Env != "frozen" {
+			t.Fatalf("launch snapshot changed: %+v", got)
+		}
+	}
+	first, err := f.Start(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	checkInvocation(first)
+	if p, err := f.Start(context.Background()); err == nil || p != nil || checks != 1 {
+		t.Fatalf("guard ran before cleanup: process=%v, err=%v, checks=%d", p, err, checks)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	allow = false
+	before := bootSequence.Load()
+	if p, err := f.Start(context.Background()); !errors.Is(err, denied) || p != nil {
+		t.Fatalf("guard failure: process=%v, err=%v", p, err)
+	}
+	if bootSequence.Load() != before+1 || checks != 2 || f.previous != first {
+		t.Fatalf("failed guard did not preserve attempt/publication boundaries: id=%d, checks=%d, previous=%p", bootSequence.Load(), checks, f.previous)
+	}
+	allow = true
+	next, err := f.Start(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer next.Close()
+	checkInvocation(next)
+	if checks != 3 || next.ID <= before+1 {
+		t.Fatalf("guard was not rerun after repair: id=%d, checks=%d", next.ID, checks)
+	}
+}
+
+func TestBeforeStartHonorsCancellation(t *testing.T) {
+	for _, returnContextError := range []bool{false, true} {
+		t.Run(fmt.Sprintf("return-error-%t", returnContextError), func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			cfg := helperConfig(t, "echo")
+			calls := 0
+			cfg.BeforeStart = func(received context.Context, _ string) error {
+				calls++
+				if received != ctx {
+					t.Fatal("guard did not receive spawn context")
+				}
+				cancel()
+				if returnContextError {
+					return received.Err()
+				}
+				return nil
+			}
+			f, err := NewFactory(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if p, err := f.Start(ctx); p != nil || !errors.Is(err, context.Canceled) || f.previous != nil || calls != 1 {
+				t.Fatalf("canceled guard published process: process=%v, err=%v, previous=%p, calls=%d", p, err, f.previous, calls)
+			}
+			if _, err := f.Start(ctx); !errors.Is(err, context.Canceled) || calls != 1 {
+				t.Fatalf("already canceled attempt reached guard: err=%v, calls=%d", err, calls)
+			}
+		})
+	}
+}
+
+func TestExplicitResolverRetainsRelativePATHAndSkipsInvalidCandidates(t *testing.T) {
+	dir := t.TempDir()
+	for _, sub := range []string{"bad", "bin"} {
+		if err := os.Mkdir(filepath.Join(dir, sub), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "bad", "program"), []byte("not executable"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(dir, "bin", "program")
+	if err := os.WriteFile(want, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, input := range []string{"program", "./bin/program"} {
+		f, err := NewFactory(Config{Executable: input, Workspace: dir, Env: []string{"PATH=bad" + string(os.PathListSeparator) + "bin"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if f.Locator() != want {
+			t.Fatalf("explicit %q resolved to %q, want %q", input, f.Locator(), want)
+		}
+	}
+}
+
+func TestInjectedIdentityAllowsHelperAndRejectsReplacedSelf(t *testing.T) {
+	dir := t.TempDir()
+	selfPath := filepath.Join(dir, "proxy")
+	if err := os.WriteFile(selfPath, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	self, err := launcher.CaptureIdentity(selfPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := helperConfig(t, "echo")
+	cfg.BeforeStart = self.Check
+	f, err := NewFactory(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := f.Start(context.Background())
+	if err != nil {
+		t.Fatalf("independently injected self identity forbade the test helper: %v", err)
+	}
+	defer first.Close()
+	_ = line(t, first)
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// The current self locator can now identify a different inode than the
+	// startup snapshot. A fresh check must still reject that identity.
+	replacement := filepath.Join(dir, "replacement")
+	if err := os.Symlink(cfg.Executable, replacement); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(replacement, selfPath); err != nil {
+		t.Fatal(err)
+	}
+	before := bootSequence.Load()
+	if p, err := f.Start(context.Background()); p != nil || err == nil || !strings.Contains(err.Error(), "proxy itself") {
+		t.Fatalf("current self alias was not rejected before spawn: process=%v, err=%v", p, err)
+	}
+	if bootSequence.Load() != before+1 || f.previous != first {
+		t.Fatal("identity failure did not consume exactly one attempt without publication")
 	}
 }

@@ -151,6 +151,19 @@ func Run(in io.Reader, out io.Writer, cfg Config) error {
 					break
 				}
 				response = result(msg.ID, map[string]any{"protocolVersions": []string{"2026-07-28"}, "serverInfo": map[string]string{"name": "raw-snapshot-fixture", "version": "1"}, "capabilities": map[string]any{}})
+			case "tools/call":
+				var params struct {
+					Name string `json:"name"`
+				}
+				if err := json.Unmarshal(msg.Params, &params); err != nil || params.Name != "future_tool" {
+					response = []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"error":{"code":-32602,"message":"unknown fixture tool"}}`, msg.ID))
+					break
+				}
+				text, _ := json.Marshal(snap)
+				response = result(msg.ID, map[string]any{
+					"content":           []map[string]string{{"type": "text", "text": string(text)}},
+					"structuredContent": snap,
+				})
 			case "fixture/snapshot":
 				response = result(msg.ID, snap)
 			case "fixture/echo":

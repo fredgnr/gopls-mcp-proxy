@@ -50,3 +50,7 @@
 本目录保留实现目标及原始验收目录。当前实现见 [运行设计](../../design.md)、[验证范围](../../validation.md) 和 [实施记录](implementation-results.md)。旧工具镜像和“普通内容不换代”的断言已移除。
 
 P0–P5 的产物与实际验证入口见实施记录。完整 VAL 场景目录与实际子断言分开记录；早期文档 CI 不充当新运行时验收。
+
+## 后续增量方案
+
+[默认 gopls 启动入口](../default-gopls-launcher/README.md)已实现无参数自动定位后端，并复用本方案的刷新和协议实现。当前新增入口、平台与真实 Codex 的分层验收见[实施记录](../default-gopls-launcher/implementation-results.md)；历史验收结果不代表新增入口已通过。

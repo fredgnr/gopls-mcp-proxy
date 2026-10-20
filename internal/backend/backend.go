@@ -28,6 +28,10 @@ type Config struct {
 	CleanupTimeout  time.Duration
 	Logger          *slog.Logger
 	Stderr          io.Writer
+	// BeforeStart validates the fixed locator immediately before each spawn.
+	// Callers supply their identity policy; nil leaves the generic process
+	// factory usable without assuming the current executable is forbidden.
+	BeforeStart func(context.Context, string) error
 }
 
 // Factory fixes the command locator, arguments, cwd and environment for one
@@ -77,6 +81,10 @@ func NewFactory(cfg Config) (*Factory, error) {
 	}
 	return &Factory{cfg: cfg}, nil
 }
+
+// Locator returns the absolute command path fixed at factory construction.
+// A symlink path stays intact so ordinary upgrades can be observed on restart.
+func (f *Factory) Locator() string { return f.cfg.Executable }
 
 func resolveExecutable(name string, env []string, cwd string) (string, error) {
 	if name == "" {
@@ -168,6 +176,24 @@ func (f *Factory) Start(ctx context.Context) (*Process, error) {
 	cmd.Dir, cmd.Env = f.cfg.Workspace, slices.Clone(f.cfg.Env)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = childIn, childOut, f.cfg.Stderr
 	configureProcess(cmd)
+	closePipes := func() {
+		_ = childIn.Close()
+		_ = childOut.Close()
+		_ = parentIn.Close()
+		_ = parentOut.Close()
+	}
+	if f.cfg.BeforeStart != nil {
+		if err := f.cfg.BeforeStart(ctx, f.cfg.Executable); err != nil {
+			closePipes()
+			return failed(fmt.Errorf("backend start check: %w", err))
+		}
+	}
+	// A checker can consume the remaining deadline or cancel its context while
+	// returning nil. Do not execute the child after that cancellation.
+	if err := ctx.Err(); err != nil {
+		closePipes()
+		return failed(err)
+	}
 	err = cmd.Start()
 	_ = childIn.Close()
 	_ = childOut.Close()

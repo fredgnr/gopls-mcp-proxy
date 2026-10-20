@@ -4,7 +4,10 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"os"
 	"runtime"
 	"strconv"
@@ -129,5 +132,50 @@ func TestExecutableDigestHonorsCancellation(t *testing.T) {
 	defer cancel()
 	if _, err := executableDigest(ctx, path); err != context.DeadlineExceeded {
 		t.Fatalf("digest did not obey deadline: %v", err)
+	}
+}
+
+func TestBeforeStartFailureClosesAllPipes(t *testing.T) {
+	fdDir := "/dev/fd"
+	if runtime.GOOS == "linux" {
+		fdDir = "/proc/self/fd"
+	}
+	countFDs := func() int {
+		t.Helper()
+		entries, err := os.ReadDir(fdDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(entries)
+	}
+	dir := t.TempDir()
+	program := dir + "/program"
+	marker := dir + "/spawned"
+	if err := os.WriteFile(program, []byte("#!/bin/sh\nprintf spawned > spawned\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	denied := errors.New("deny spawn")
+	f, err := NewFactory(Config{
+		Executable: program, Workspace: dir,
+		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		BeforeStart: func(context.Context, string) error { return denied },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := countFDs()
+	for range 20 {
+		if p, err := f.Start(context.Background()); p != nil || !errors.Is(err, denied) {
+			t.Fatalf("guard failure: process=%v, err=%v", p, err)
+		}
+	}
+	if after := countFDs(); after > before {
+		t.Fatalf("guard failure leaked descriptors: before=%d, after=%d", before, after)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("denied child executed: %v", err)
+	}
+	if f.previous != nil {
+		t.Fatal("denied attempt became previous process")
 	}
 }

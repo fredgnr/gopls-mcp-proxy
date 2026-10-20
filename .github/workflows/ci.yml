@@ -49,16 +49,43 @@ jobs:
         run: test -z "$(gofmt -l .)"
       - name: Vet
         run: go vet ./...
+      - name: Record tested source and runner identity
+        shell: bash
+        run: |
+          mkdir -p test-results
+          python3 - <<'PY'
+          import datetime, json, os, platform, subprocess
+          def command(*args):
+              return subprocess.check_output(args, text=True).strip()
+          metadata = {
+              "recorded_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+              "revision": command("git", "rev-parse", "HEAD"),
+              "tree": command("git", "rev-parse", "HEAD^{tree}"),
+              "worktree": command("git", "status", "--porcelain"),
+              "go": command("go", "version"),
+              "platform": platform.platform(), "architecture": platform.machine(),
+              "uid": os.getuid(), "cpu_count": os.cpu_count(),
+              "run_id": os.environ["GITHUB_RUN_ID"],
+              "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "event": os.environ["GITHUB_EVENT_NAME"],
+              "real_codex_status": "pending: this job does not run a Codex client"
+          }
+          with open("test-results/source.json", "w") as f:
+              json.dump(metadata, f, indent=2)
+          PY
       - name: Unit and protocol components (race)
         shell: bash
         run: |
           mkdir -p test-results
           go test -race -json ./cmd/... ./internal/... -count=1 | tee test-results/unit.json
+          python3 scripts/check-launcher-tests.py unit test-results/unit.json > test-results/launcher-unit.json
       - name: Raw backend independent refresh and protocol contract (required)
         env:
           PROXY_TEST_EVIDENCE_DIR: ${{ runner.temp }}/proxy-evidence
         shell: bash
-        run: go test -race -json ./integration -run '^TestRaw' -count=1 | tee test-results/raw-contract.json
+        run: |
+          go test -race -json ./integration -run '^TestRaw' -count=1 | tee test-results/raw-contract.json
+          python3 scripts/check-launcher-tests.py raw test-results/raw-contract.json > test-results/launcher-raw.json
       - run: go build ./cmd/gopls-mcp-proxy
       - name: Install pinned gopls
         if: matrix.integration
@@ -69,7 +96,9 @@ jobs:
           GOPLS_INTEGRATION: '1'
           PROXY_TEST_EVIDENCE_DIR: ${{ runner.temp }}/proxy-evidence
         shell: bash
-        run: go test -json ./integration -run '^TestRealGopls' -count=1 | tee test-results/real-gopls.json
+        run: |
+          go test -json ./integration -run '^TestRealGopls' -count=1 | tee test-results/real-gopls.json
+          python3 scripts/check-launcher-tests.py real test-results/real-gopls.json > test-results/launcher-real.json
       - name: Upload test evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
