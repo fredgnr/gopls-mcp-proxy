@@ -20,18 +20,28 @@ type Tracker interface {
 	Watch(context.Context, func(string))
 	Epoch() uint64
 }
+
+const (
+	RefreshOnChange = "on-change"
+	RefreshPerCall  = "per-call"
+)
+
 type Config struct {
 	Debounce, MaxDebounce, PollInterval, DrainTimeout, StartupTimeout, RequestTimeout time.Duration
 	RefreshTimeout, CleanupTimeout, RetryMin, RetryMax                                time.Duration
 	QueueLimit, QueueBytes, MaxFrameBytes, MaxConcurrent                              int
 	DisableWatcher                                                                    bool
+	RefreshMode                                                                       string
 	Logger                                                                            *slog.Logger
 }
 
 func DefaultConfig() Config {
-	return Config{Debounce: 500 * time.Millisecond, MaxDebounce: 2 * time.Second, PollInterval: 2 * time.Second, DrainTimeout: 5 * time.Second, StartupTimeout: 45 * time.Second, RequestTimeout: 110 * time.Second, RefreshTimeout: 60 * time.Second, CleanupTimeout: 6 * time.Second, RetryMin: time.Second, RetryMax: 30 * time.Second, QueueLimit: 64, QueueBytes: 64 << 20, MaxFrameBytes: 16 << 20, MaxConcurrent: 8, Logger: slog.Default()}
+	return Config{Debounce: 500 * time.Millisecond, MaxDebounce: 2 * time.Second, PollInterval: 2 * time.Second, DrainTimeout: 5 * time.Second, StartupTimeout: 45 * time.Second, RequestTimeout: 110 * time.Second, RefreshTimeout: 60 * time.Second, CleanupTimeout: 6 * time.Second, RetryMin: time.Second, RetryMax: 30 * time.Second, QueueLimit: 64, QueueBytes: 64 << 20, MaxFrameBytes: 16 << 20, MaxConcurrent: 8, RefreshMode: RefreshOnChange, Logger: slog.Default()}
 }
 func (c Config) Validate() error {
+	if c.RefreshMode != RefreshOnChange && c.RefreshMode != RefreshPerCall {
+		return fmt.Errorf("invalid refresh mode %q: use on-change or per-call", c.RefreshMode)
+	}
 	if c.Debounce < 0 || c.DrainTimeout < 0 || c.MaxDebounce <= 0 || c.PollInterval <= 0 || c.StartupTimeout <= 0 || c.RequestTimeout <= 0 || c.RefreshTimeout <= 0 || c.CleanupTimeout <= 0 || c.RetryMin <= 0 || c.RetryMax < c.RetryMin || c.QueueLimit < 1 || c.MaxConcurrent < 1 || c.QueueBytes < 1 || c.MaxFrameBytes < 1 {
 		return errors.New("invalid proxy budgets")
 	}
@@ -111,6 +121,9 @@ type queued struct {
 	batch    bool
 	bytes    int
 	deadline time.Time
+	// A per-call tool request may use only the process started for this exact
+	// queue item. A cancelled item cannot donate its fresh process to its successor.
+	freshBoot uint64
 }
 type resultFrame struct {
 	msgs  []wire.Message
@@ -135,6 +148,7 @@ type relay struct {
 	readyBatches                                  []*batchGroup
 	startResult                                   chan startDone
 	startFinished                                 chan struct{}
+	startingCall                                  *queued
 	ctx                                           context.Context
 	cancel                                        context.CancelFunc
 	cfg                                           Config
@@ -464,6 +478,17 @@ func (r *relay) advance() {
 		r.scan("results")
 		return
 	}
+	if r.cfg.RefreshMode == RefreshPerCall && len(r.queue) > 0 && r.queue[0].isToolCall() && r.queue[0].freshBoot != r.proc.ID {
+		// A newly arrived call must not trigger the drain timer on an existing
+		// operation. Wait for its result and all related traffic to be written.
+		// Filesystem invalidations retain their independent freshness behavior.
+		if r.callBoundaryIdle() {
+			r.invalidate("tools_call")
+			return
+		}
+		// Keep periodic freshness checks live while a previous operation holds
+		// the boundary, including when filesystem watching is disabled.
+	}
 	if len(r.queue) > 0 && r.canDispatch(r.queue[0]) {
 		r.scan("dispatch")
 		return
@@ -510,6 +535,10 @@ func (r *relay) scanned(e scanDone) {
 		r.candidate = e.snap
 		r.phase = "starting"
 		r.startAt = time.Now()
+		r.startingCall = nil
+		if r.cfg.RefreshMode == RefreshPerCall && len(r.queue) > 0 && r.queue[0].isToolCall() {
+			r.startingCall = r.queue[0]
+		}
 		r.startFinished = make(chan struct{})
 		finished := r.startFinished
 		go func() {
@@ -572,6 +601,10 @@ func (r *relay) started(e startDone) {
 		return
 	}
 	r.proc = e.proc
+	if r.startingCall != nil {
+		r.startingCall.freshBoot = e.proc.ID
+		r.startingCall = nil
+	}
 	r.back = make(chan writeItem, 16)
 	r.backPending = nil
 	r.backBytes = 0
@@ -685,6 +718,14 @@ func (r *relay) active() int {
 		}
 	}
 	return n
+}
+
+// callBoundaryIdle is stronger than active()==0: a response buffered for the
+// frontend, or a reply to a reverse request still being written, must finish on
+// its original process before a new tool call can replace that process.
+func (r *relay) callBoundaryIdle() bool {
+	return !r.scanning && r.active() == 0 && len(r.reverse) == 0 && len(r.controls) == 0 &&
+		len(r.results) == 0 && len(r.readyBatches) == 0 && len(r.frontPending) == 0 && len(r.backPending) == 0
 }
 func (r *relay) expire() {
 	now := time.Now()

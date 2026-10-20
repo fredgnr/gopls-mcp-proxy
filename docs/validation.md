@@ -15,6 +15,9 @@
 | 范围 | 主要用例/文件 |
 |---|---|
 | 原始 argv、cwd/env、PATH、分隔符及旧参数迁移 | `cmd/gopls-mcp-proxy/main_test.go`、`TestRawArgumentsEnvironmentAndWorkingDirectory`、`TestRawProxyArgvAndEnvironment` |
+| 刷新模式默认值、显式选择、无效参数及本地诊断 | `TestRefreshModeOptions`、`TestLocalDiagnosticsDoNotEnterRuntimeSetup` |
+| 每次工具调用的新进程、排队/取消/控制路由与 batch 边界 | `internal/proxy/per_call_test.go`、`integration/per_call_test.go` |
+| 真实 gopls 每次工具调用换代及新增/重命名/修改/删除 | `TestRealGoplsPerCallFreshProcessAndFileChanges` |
 | raw JSON、typed ID、数字精度、扩展字段、null、短读短写、大帧与 batch | `internal/wire/wire_test.go`、`TestRawProxyPayloadIdentity`、`TestRawProxyLegacyBatch` |
 | 常规输入内容、同长度同 mtime 修改、范围/glob/符号链接 | `internal/workspace/content_test.go`、`tracker_test.go` |
 | 写入后恢复原值、事件 epoch、事件丢失、扫描竞态/取消/读取错误 | workspace 内容测试、`TestRawProxyIdlePollRefresh`、`TestRawProxyWatcherSameContentInvalidates` |
@@ -66,7 +69,7 @@ CI 保留 Linux/macOS、最低 Go 1.25、Go 1.27.2、固定 gopls v0.24.0、race
 
 CI 使用 `contents: read`，checkout 为 `persist-credentials: false`，不使用 `pull_request_target`。本次验证配置不增加 tag、Release 或发布权限。
 
-本次开发的最终提交、命令结果和远端 Actions 链接由[默认入口实施记录](changes/default-gopls-launcher/implementation-results.md)与所链接的 PR/CI 统一登记。本文不预先宣布尚未运行的最终 Linux/macOS 矩阵通过。
+默认入口开发的最终提交、命令结果和远端 Actions 链接由[默认入口实施记录](changes/default-gopls-launcher/implementation-results.md)与所链接的 PR/CI 登记；该历史记录不作为新增 `per-call` 模式的通过证据。本文不预先宣布尚未运行的最终 Linux/macOS 矩阵通过。
 
 ## 明确限制
 
@@ -83,3 +86,11 @@ CI 使用 `contents: read`，checkout 为 `persist-credentials: false`，不使�
 `integration/default_launcher*_test.go` 对应必跑 raw suite；`TestRealGoplsDefaultLauncherTwoProtobufUpgrades` 是独立的真实后端默认入口，原显式测试仍保留。`scripts/check-launcher-tests.py` 从 JSON 确认每个新增入口用例实际运行并通过，缺失、失败或 skip 均使对应 CI 步骤失败。
 
 平台、提交 tree、工作树、Go 版本、run/attempt 和权限身份写入 `source.json`；安装路径、argv、PID、二进制哈希及原始轨迹归档在监测树外。当前结果与 36 项用例映射见[默认入口实施记录](changes/default-gopls-launcher/implementation-results.md)。真实 gopls 不代替独立刷新因果，raw harness 不代替真实 Codex。
+
+## 每次工具调用重建
+
+`integration/per_call_test.go` 用只在启动时读取文件的夹具，覆盖无文件变化也换进程、监测范围外和排除文件的更新、现代首调用、串行排队与反向响应/进度/控制通知、取消、不重放和 batch 拒绝。`internal/proxy/per_call_test.go` 补充配置校验、响应交付前不换代、等待期间继续轮询、取消队首不转让新进程及 typed ID 边界。
+
+`TestRealGoplsPerCallFreshProcessAndFileChanges` 使用固定 v0.24.0 的 sibling gopls，关闭 watcher 并将轮询设为 1h；七次 `go_search` 分别验证不变输入、新增、重命名、同 mtime 内容修改、旧符号消失与删除，每次记录新 boot/PID/generation，并核对原生工具目录保持不变。该用例验证实际 gopls 互通，不能替代上述独立夹具的刷新因果证据，也不证明真实 Codex 客户端验收。
+
+`scripts/check-launcher-tests.py` 同时检查上述三个 `per_call*_test.go` 文件中的测试：对应组件、raw 和真实后端步骤必须实际执行并通过，缺失、失败或 skip 均拒绝通过。该模式仍保留原有输入校验，不承诺未保存编辑、并发写入的一致快照或跨进程业务 handle 的迁移。

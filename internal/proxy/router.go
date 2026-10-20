@@ -30,6 +30,9 @@ func (r *relay) fromFront(raw []byte) {
 			}
 		}
 	}
+	if r.cfg.RefreshMode == RefreshPerCall && r.rejectPerCallBatch(f) {
+		return
+	}
 	q := &queued{batch: f.Batch, bytes: len(raw), deadline: time.Now().Add(r.cfg.RequestTimeout)}
 	group := &batchGroup{batch: f.Batch}
 	for _, m := range f.Messages {
@@ -255,6 +258,16 @@ func (r *relay) pruneQueue() {
 func (r *relay) canDispatch(q *queued) bool {
 	if r.phase != "ready" || r.proc == nil {
 		return false
+	}
+	if r.cfg.RefreshMode == RefreshPerCall {
+		if q.isToolCall() && (q.freshBoot != r.proc.ID || !r.callBoundaryIdle()) {
+			return false
+		}
+		for _, rec := range r.pending {
+			if rec.msg.Method == "tools/call" {
+				return false
+			}
+		}
 	}
 	if len(r.pending)+len(q.records) > r.cfg.QueueLimit+r.cfg.MaxConcurrent {
 		return false
@@ -629,4 +642,60 @@ func (q *queued) msgsRaw() [][]byte {
 		out[i] = m.Raw
 	}
 	return out
+}
+
+func (q *queued) isToolCall() bool {
+	for _, rec := range q.records {
+		if rec.msg.Method == "tools/call" && !rec.cancelled {
+			return true
+		}
+	}
+	return false
+}
+
+// Per-call isolation cannot share a process between batch members. Reject such
+// a batch before handling even its control messages, rather than execute some
+// members or silently weaken the per-call guarantee. Ordinary batches keep the
+// normal revision-specific behavior.
+func (r *relay) rejectPerCallBatch(f wire.Frame) bool {
+	if !f.Batch {
+		return false
+	}
+	hasCall := false
+	for _, m := range f.Messages {
+		hasCall = hasCall || (m.Kind == wire.Request && m.Method == "tools/call")
+	}
+	if !hasCall {
+		return false
+	}
+	ids := make(map[string]bool)
+	for _, m := range f.Messages {
+		if m.Kind != wire.Request {
+			r.fatal = errors.New("per_call_batch_unsupported: tools/call must be sent as an individual request")
+			return true
+		}
+		if ids[m.ID.Key] {
+			r.fatal = errors.New("duplicate request ID in batch")
+			return true
+		}
+		ids[m.ID.Key] = true
+		if rec := r.pending[m.ID.Key]; rec != nil && !rec.cancelled {
+			r.fatal = errors.New("duplicate outstanding request ID")
+			return true
+		}
+		for _, q := range r.queue {
+			for _, rec := range q.records {
+				if rec.msg.ID.Key == m.ID.Key && !rec.cancelled {
+					r.fatal = errors.New("duplicate queued request ID")
+					return true
+				}
+			}
+		}
+	}
+	responses := make([][]byte, 0, len(f.Messages))
+	for _, m := range f.Messages {
+		responses = append(responses, protocol.ErrorResponse(m.ID, "per_call_batch_unsupported", 0, false, false))
+	}
+	r.sendFront(joinFrame(responses, true))
+	return true
 }
