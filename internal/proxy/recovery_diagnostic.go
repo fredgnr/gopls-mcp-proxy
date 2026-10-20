@@ -26,8 +26,9 @@ func (d RecoveryDiagnostic) String() string {
 		d.RequestedVersion, d.NegotiatedVersion, d.Side, d.Path, d.Reason, d.ActualType)
 }
 
-// InitializationDiagnostic is available after a successful initialize response
-// has actually been delivered to the client, including when recovery is blocked.
+// InitializationDiagnostic is available when a successful backend initialize
+// response is recorded at the freshness gate. Per-call mode checks it before
+// frontend delivery and rejects a known incompatible handshake.
 func (r *Recovery) InitializationDiagnostic() (RecoveryDiagnostic, bool) {
 	return r.initDiagnostic, len(r.initRequest) != 0
 }

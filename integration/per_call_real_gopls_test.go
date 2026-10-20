@@ -19,8 +19,8 @@ func TestRealGoplsPerCallFreshProcessAndFileChanges(t *testing.T) {
 	testRealGoplsFileChanges(t, "per-call", `{"protocolVersion":"2025-11-25","clientInfo":{"name":"per-call-acceptance","version":"1"},"capabilities":{"roots":{"listChanged":true}}}`)
 }
 
-// Run the incident's known client shape through both refresh triggers. Native
-// symbol results prove additions, renames, edits and deletions become visible.
+// Run the source-reconstructed Codex shape through both refresh triggers. Native
+// tool results prove additions, renames, edits and deletions become visible.
 func TestRealGoplsCodexRecovery(t *testing.T) {
 	for _, mode := range []string{"per-call", "on-change"} {
 		t.Run(mode, func(t *testing.T) {
@@ -143,10 +143,12 @@ func testRealGoplsFileChanges(t *testing.T, mode, initializeParams string) {
 		return identities
 	}
 	previous := published()
-	search := func(id, query, present, absent string, unchanged bool) {
+	toolCalls := 0
+	callTool := func(id, name string, arguments map[string]any, present, absent string, unchanged bool) {
 		t.Helper()
-		params, _ := json.Marshal(map[string]any{"name": "go_search", "arguments": map[string]string{"query": query}})
+		params, _ := json.Marshal(map[string]any{"name": name, "arguments": arguments})
 		raw := call(id, "tools/call", string(params))
+		toolCalls++
 		var reply struct {
 			Error  json.RawMessage `json:"error"`
 			Result struct {
@@ -160,17 +162,17 @@ func testRealGoplsFileChanges(t *testing.T, mode, initializeParams string) {
 			t.Fatal(err)
 		}
 		if len(reply.Error) != 0 || reply.Result.IsError {
-			t.Fatalf("go_search %s failed: %s", query, raw)
+			t.Fatalf("%s failed: %s", name, raw)
 		}
 		var text strings.Builder
 		for _, content := range reply.Result.Content {
 			text.WriteString(content.Text)
 		}
 		if present != "" && !strings.Contains(text.String(), present) {
-			t.Fatalf("go_search %s missing %q: %s", query, present, raw)
+			t.Fatalf("%s missing %q: %s", name, present, raw)
 		}
 		if absent != "" && strings.Contains(text.String(), absent) {
-			t.Fatalf("go_search %s retained %q: %s", query, absent, raw)
+			t.Fatalf("%s retained %q: %s", name, absent, raw)
 		}
 		current := published()
 		old, next := previous[len(previous)-1], current[len(current)-1]
@@ -189,7 +191,16 @@ func testRealGoplsFileChanges(t *testing.T, mode, initializeParams string) {
 			t.Fatal("frontend process changed")
 		}
 		previous = current
-		t.Logf("mode=%s proxy_pid=%d boot_id=%d backend_pid=%d query=%s", mode, proxyPID, next.Boot, next.PID, query)
+		t.Logf("mode=%s proxy_pid=%d boot_id=%d backend_pid=%d tool=%s", mode, proxyPID, next.Boot, next.PID, name)
+	}
+	// These are the three native tools named in the incident report. Each must
+	// succeed on the same frontend even when per-call replaces its backend.
+	callTool(`"workspace"`, "go_workspace", map[string]any{}, workspace, "", true)
+	callTool(`"context"`, "go_file_context", map[string]any{"file": mainFile}, mainFile, "", true)
+	callTool(`"diagnostics-clean"`, "go_diagnostics", map[string]any{"files": []string{mainFile}}, "No diagnostics.", "", true)
+	search := func(id, query, present, absent string, unchanged bool) {
+		t.Helper()
+		callTool(id, "go_search", map[string]any{"query": query}, present, absent, unchanged)
 	}
 	search("1", "FixtureOriginalSymbol", mainFile, "", true)
 	search("2", "FixtureOriginalSymbol", mainFile, "", true)
@@ -215,6 +226,17 @@ func testRealGoplsFileChanges(t *testing.T, mode, initializeParams string) {
 		t.Fatal(err)
 	}
 	search("7", "FixtureAddedSymbol", "No symbols found.", renamed, false)
+	// Diagnose an edit, then add the missing declaration in a new file. This
+	// catches stale package membership as well as stale existing-file content.
+	write(mainFile, "package fixture\nvar FixtureModifiedSymbol = FixtureNewDeclaration\n")
+	callTool(`"diagnostics-edit"`, "go_diagnostics", map[string]any{"files": []string{mainFile}}, "undefined: FixtureNewDeclaration", "No diagnostics.", false)
+	declarationFile := filepath.Join(workspace, "declaration.go")
+	write(declarationFile, "package fixture\nconst FixtureNewDeclaration = 1\n")
+	callTool(`"diagnostics-add"`, "go_diagnostics", map[string]any{"files": []string{mainFile, declarationFile}}, "No diagnostics.", "undefined: FixtureNewDeclaration", false)
+	if err := os.Remove(declarationFile); err != nil {
+		t.Fatal(err)
+	}
+	callTool(`"diagnostics-delete"`, "go_diagnostics", map[string]any{"files": []string{mainFile}}, "undefined: FixtureNewDeclaration", "No diagnostics.", false)
 	if after := call(`"catalogue"`, "tools/list", `{}`); !rawJSONEqual(catalogue, after) {
 		t.Fatalf("native tools catalogue changed across per-call recovery:\nbefore=%s\nafter=%s", catalogue, after)
 	}
@@ -222,6 +244,7 @@ func testRealGoplsFileChanges(t *testing.T, mode, initializeParams string) {
 		t.Fatalf("tools/list triggered per-call replacement: before=%d after=%d", len(previous), len(got))
 	}
 	p.shutdown()
+	requireRecoverableInitialization(t, p.log)
 	logs, err := os.ReadFile(p.log)
 	if err != nil {
 		t.Fatal(err)
@@ -232,5 +255,5 @@ func testRealGoplsFileChanges(t *testing.T, mode, initializeParams string) {
 	for _, identity := range published() {
 		requireBackendExited(t, identity.PID)
 	}
-	t.Logf("mode=%s real gopls: %d tool calls, %d published backends, one frontend pid=%d", mode, 7, len(previous), proxyPID)
+	t.Logf("mode=%s real gopls: %d tool calls, %d published backends, one frontend pid=%d", mode, toolCalls, len(previous), proxyPID)
 }

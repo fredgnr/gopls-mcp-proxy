@@ -588,10 +588,15 @@ func (r *relay) deliverBatch(g *batchGroup, fresh bool) {
 		return
 	}
 	g.done = true
+	var initializationErr error
 	for i, rec := range g.records {
 		r.resultBytes -= len(g.responses[i])
 		if g.upstream[i] {
-			if !fresh || rec.generation != r.generation || r.proc == nil || rec.boot != r.proc.ID || r.tracker.Epoch() != r.snapshot.Epoch {
+			if r.phase == "closing" {
+				// An earlier initialize in this same scan may have rejected
+				// per-call mode. Do not publish another successful session result.
+				g.responses[i] = r.recoveryError(rec)
+			} else if !fresh || rec.generation != r.generation || r.proc == nil || rec.boot != r.proc.ID || r.tracker.Epoch() != r.snapshot.Epoch {
 				g.responses[i] = r.proxyError(rec, "workspace_changed")
 			} else {
 				m, err := wire.ParseMessage(g.responses[i])
@@ -599,6 +604,17 @@ func (r *relay) deliverBatch(g *batchGroup, fresh bool) {
 					r.recovery.ObserveResponse(rec.msg, m)
 					if rec.msg.Method == "initialize" {
 						r.logInitializationRecovery()
+						if _, success := wire.Get(m.Raw, "result"); success && r.cfg.RefreshMode == RefreshPerCall {
+							if d, known := r.recovery.InitializationDiagnostic(); known && d.Reason != "" {
+								// Every tool call must replace the backend in this
+								// mode. Reject a known incompatibility now instead
+								// of reporting a usable session until its first call.
+								// Preflight is intentionally not used: initialized
+								// has not arrived yet, even for a valid handshake.
+								initializationErr = fmt.Errorf("%w: %s", ErrReconnectRequired, d.String())
+								g.responses[i] = r.recoveryError(rec)
+							}
+						}
 					}
 				}
 			}
@@ -617,6 +633,12 @@ func (r *relay) deliverBatch(g *batchGroup, fresh bool) {
 	}
 	g.responses = nil
 	g.records = nil
+	if initializationErr != nil {
+		// Enqueue the initialize error before failing queued requests. The
+		// bounded closing path waits for writer acknowledgement and reaps the
+		// backend; this initialize was dispatched and its response was received.
+		r.failRecovery(initializationErr)
+	}
 }
 func (r *relay) proxyError(rec *record, reason string) []byte {
 	if rec.dispatched {

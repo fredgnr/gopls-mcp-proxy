@@ -10,8 +10,9 @@ import (
 )
 
 // logInitializationRecovery reports static initialization eligibility as soon
-// as the successful handshake is forwarded. This is not a promise that future
-// backend state, directory snapshots or protocol settings will remain equal.
+// as a successful backend handshake passes the freshness gate. Per-call mode
+// may replace that success with a recovery error before frontend delivery. This
+// does not promise that future state or replacement contracts will remain equal.
 func (r *relay) logInitializationRecovery() {
 	if r.initializationLogged {
 		return

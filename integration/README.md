@@ -94,3 +94,22 @@ python3 scripts/check-launcher-tests.py real /tmp/real-gopls.json
 `per_call_test.go` 的 `TestRawPerCall*` 用例验证 `--refresh-mode per-call` 在无文件变化时也为每次 `tools/call` 启动新后端；默认模式仍复用进程。关闭 watcher、1h 轮询及被排除/范围外文件用于证明强制换代不依赖文件检测。其余用例覆盖现代首调用、串行排队、反向响应/进度/控制通知、排队取消、执行失败不重放，以及纯请求 batch 分组拒绝和混合 batch 转发前终止。
 
 `TestRealGoplsPerCallFreshProcessAndFileChanges` 使用 sibling gopls v0.24.0，逐次关联 `go_search` 的新 boot/PID/generation，验证不变输入、新增、重命名、同 mtime 修改和删除；`tools/list` 仍返回相同原生目录且不单独强制换代。应用请求/响应与代理日志保留在监测树之外。上面的 raw/real 命令包含这些用例，JSON 门禁拒绝缺失、失败或跳过；默认入口的历史实施记录不代表新增模式已通过。
+
+## Codex auth-change 初始化恢复回归
+
+`testdata/codex-0.163.0-initialize.json` 根据 Codex `rust-v0.163.0` 的源码重建，包含
+`elicitation.form/url` 和 `experimental: {"codex/auth-change": {}}`。外层
+`experimental` 非空，扩展值本身为空；这是客户端的静态能力标记，并非认证令牌。
+该 fixture 不是故障连接抓包，也不代表真实 Codex 客户端已在 CI 中运行。
+
+`TestRawCodexRecoveryAcrossRefreshModes` 在 `per-call` 和 `on-change` 中验证完整初始化
+参数原样恢复、旧进程退出、无业务重放，以及日志明确记录 `recoverable=true`。
+`TestRawCodexAuthChangeRejectsStatefulDeclaration` 验证真正带有 `sessionToken` 字段的
+未知声明仍被拒绝：`per-call` 在初始化阶段返回明确错误，`on-change` 在刷新前拒绝恢复；
+均不启动替代进程或派发工具，错误和代理日志不包含令牌值。
+
+`TestRealGoplsCodexRecovery` 在两种模式中连续调用 `go_workspace`、`go_file_context`、
+`go_diagnostics`，随后执行符号增删改查，并用“修改已有文件引入未定义符号 → 新增文件
+提供定义 → 删除定义文件”确认诊断随磁盘状态更新。每次必要的刷新都检查 boot/PID/generation
+及旧进程退出，关闭前后工具目录保持一致。现有 CI 会在 Linux/macOS、gopls v0.23.0/v0.24.0
+组合中执行这些真实后端用例。
