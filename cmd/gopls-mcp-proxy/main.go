@@ -90,6 +90,7 @@ func parseOptions(args []string, stderr io.Writer) (options, error) {
 	flags.Var(&o.watchRoots, "watch-root", "additional input directory or file (repeatable; relative to cwd)")
 	flags.Var(&o.include, "include", "include root-relative glob (repeatable; supports **)")
 	flags.Var(&o.exclude, "exclude", "exclude root-relative glob (repeatable; exclusion wins)")
+	flags.StringVar(&o.cfg.RefreshMode, "refresh-mode", o.cfg.RefreshMode, "backend refresh policy: on-change or per-call (fresh backend for each tools/call)")
 	flags.BoolVar(&o.goDiscovery, "go-discovery", false, "optionally discover additional Go workspace input roots")
 	flags.DurationVar(&o.cfg.Debounce, "debounce", o.cfg.Debounce, "quiet window before refreshing changed inputs")
 	flags.DurationVar(&o.cfg.MaxDebounce, "max-debounce", o.cfg.MaxDebounce, "maximum event merging window")
@@ -197,7 +198,7 @@ func runConfigured(ctx context.Context, o options) error {
 	if err != nil {
 		return err
 	}
-	logger.Info("proxy starting", "version", buildinfo.Version, "commit", buildinfo.Commit, "mode", o.mode, "selection_source", selectionSource, "backend", factory.Locator(), "cwd", cwd)
+	logger.Info("proxy starting", "version", buildinfo.Version, "commit", buildinfo.Commit, "mode", o.mode, "refresh_mode", o.cfg.RefreshMode, "selection_source", selectionSource, "backend", factory.Locator(), "cwd", cwd)
 	return proxy.Run(ctx, o.cfg, tracker, factory, os.Stdin, os.Stdout)
 }
 

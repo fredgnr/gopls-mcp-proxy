@@ -154,9 +154,42 @@ func Run(in io.Reader, out io.Writer, cfg Config) error {
 			case "tools/call":
 				var params struct {
 					Name string `json:"name"`
+					Meta struct {
+						ProgressToken json.RawMessage `json:"progressToken"`
+					} `json:"_meta"`
 				}
-				if err := json.Unmarshal(msg.Params, &params); err != nil || params.Name != "future_tool" {
+				if err := json.Unmarshal(msg.Params, &params); err != nil {
 					response = []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"error":{"code":-32602,"message":"unknown fixture tool"}}`, msg.ID))
+					break
+				}
+				// These deliberately unadvertised tools exercise process ownership
+				// without changing the existing future_tool catalogue contract.
+				switch params.Name {
+				case "fixture_hold":
+					continue
+				case "fixture_crash":
+					return fmt.Errorf("requested fixture tool crash after receipt")
+				case "fixture_half":
+					_, _ = io.WriteString(out, `{"jsonrpc":"2.0","id":`)
+					return fmt.Errorf("requested fixture tool exit during response frame")
+				case "fixture_reverse":
+					if len(params.Meta.ProgressToken) > 0 {
+						progress := []byte(fmt.Sprintf(`{"jsonrpc":"2.0","method":"notifications/progress","params":{"progressToken":%s,"progress":1,"total":2,"message":"fixture started"}}`, params.Meta.ProgressToken))
+						if err := write(progress); err != nil {
+							return err
+						}
+					}
+					reverse["1"] = append([]byte(nil), msg.ID...)
+					if err := write([]byte(`{"jsonrpc":"2.0","id":1,"method":"roots/list","params":{"_meta":{"fixture":true}}}`)); err != nil {
+						return err
+					}
+					continue
+				case "future_tool":
+				default:
+					response = []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"error":{"code":-32602,"message":"unknown fixture tool"}}`, msg.ID))
+					break
+				}
+				if response != nil {
 					break
 				}
 				text, _ := json.Marshal(snap)

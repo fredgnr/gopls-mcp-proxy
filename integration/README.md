@@ -77,7 +77,7 @@ GOPLS_INTEGRATION=1 GOPLS_BIN=/absolute/path/to/gopls \
 两份身份，以及 home/root 和本地诊断边界。直接 fixture 的负向对照先证明后端不自刷新。
 
 ```sh
-go test -race -json ./integration -run '^TestRawDefaultLauncher' -count=1 > /tmp/default-launcher.json
+go test -race -json ./integration -run '^TestRaw(DefaultLauncher|PerCall)' -count=1 > /tmp/default-launcher.json
 python3 scripts/check-launcher-tests.py raw /tmp/default-launcher.json
 GOPLS_INTEGRATION=1 GOPLS_BIN=/absolute/path/to/gopls \
   go test -json ./integration -run '^TestRealGopls' -count=1 > /tmp/real-gopls.json
@@ -88,3 +88,9 @@ python3 scripts/check-launcher-tests.py real /tmp/real-gopls.json
 保留原显式互通测试；两者均比较完整工具目录并运行两次 protobuf 升级及四种源码变化。
 默认入口还保留 application-exchanges.jsonl（应用请求/响应，不声称含所有反向请求）。
 实际执行状态、Codex 客户端结果和剩余限制见[实施记录](../docs/changes/default-gopls-launcher/implementation-results.md)。
+
+## 每次工具调用重建的增量测试
+
+`per_call_test.go` 的 `TestRawPerCall*` 用例验证 `--refresh-mode per-call` 在无文件变化时也为每次 `tools/call` 启动新后端；默认模式仍复用进程。关闭 watcher、1h 轮询及被排除/范围外文件用于证明强制换代不依赖文件检测。其余用例覆盖现代首调用、串行排队、反向响应/进度/控制通知、排队取消、执行失败不重放，以及纯请求 batch 分组拒绝和混合 batch 转发前终止。
+
+`TestRealGoplsPerCallFreshProcessAndFileChanges` 使用 sibling gopls v0.24.0，逐次关联 `go_search` 的新 boot/PID/generation，验证不变输入、新增、重命名、同 mtime 修改和删除；`tools/list` 仍返回相同原生目录且不单独强制换代。应用请求/响应与代理日志保留在监测树之外。上面的 raw/real 命令包含这些用例，JSON 门禁拒绝缺失、失败或跳过；默认入口的历史实施记录不代表新增模式已通过。

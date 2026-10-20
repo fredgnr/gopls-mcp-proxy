@@ -63,6 +63,26 @@ tool_timeout_sec = 120
 
 这份扩展配置明确增加了 cwd、输入范围和超时，不属于“只改 command”的配置验收。代理自己的版本仅用于诊断和打包，不会替换原生 `serverInfo` 或 `clientInfo`。
 
+### 每次工具调用前重建 gopls
+
+增加 `--refresh-mode=per-call` 后，每个独立的 `tools/call` 都会使用新启动的后端。即使文件没有变化，或变更位于代理监测范围之外，也不复用上一次工具调用的 gopls 进程：
+
+```toml
+[mcp_servers.gopls]
+default_tools_approval_mode = "approve"
+command = "/Users/you/go/bin/gopls-mcp-proxy"
+args = ["--refresh-mode", "per-call"]
+enabled = true
+```
+
+工具调用排队执行；代理完成前一调用的交付和清理，再为下一调用启动后端并恢复允许的协议状态。工具调用执行期间，其他普通请求也会等待，取消、进度和反向请求响应仍与当前调用的后端绑定。`tools/list` 等其他方法不会单独要求重建；原有文件监测和内容检查继续生效，实际输入变化仍可能使正在执行的调用失效。调用的排队、重建与执行仍受总超时约束。
+
+此模式要求将 `tools/call` 逐条发送。包含它的纯请求 batch 在派发前按原分组返回 `per_call_batch_unsupported`，并标记 `requestDispatched: false`；若同一 batch 还混有通知或响应，则在转发任何成员前结束连接。默认模式和不含 `tools/call` 的 batch 保持原有规则。
+
+这个模式适合“保存文件后再查询”：新增、删除、重命名和内容修改由新进程重新加载，不要求代理先发现变化。实际可见范围仍由 gopls 的 cwd、Go 工作区和构建配置决定；编辑器未保存内容、调用期间的并发写入以及跨进程业务句柄不因此获得保证。已派发的工具调用不会自动重放。
+
+默认模式是 `--refresh-mode=on-change`，仍按输入变化刷新。该选项需要包含此功能的新构建；已发布的 `v0.2.0` 不包含它。
+
 ### 从旧命令迁移
 
 旧的 `--gopls`、`--workspace`、`--replace-dir` 已移除；使用它们会返回迁移提示。
@@ -110,7 +130,7 @@ gopls-mcp-proxy \
 
 原始消息通道保留未知字段、缺失与 null 的区别、数字精度、原生工具描述及错误。请求 ID 区分字符串和数字；反向请求、进度、取消和内部恢复请求按物理后端连接隔离。`ping` 转发给后端；代理不新增工具，也不伪装后端健康。
 
-一个 batch 作为整体接收和派发，不拆成多个执行批次。其请求成员数不得超过 `--max-concurrent`，并且必须同时满足队列数量、字节与帧预算；超限会在写入后端前拒绝。混有通知的 batch 无法为所有成员提供请求错误，因此预算拒绝会结束连接。
+允许的 batch 作为整体接收和派发，不拆成多个执行批次。其请求成员数不得超过 `--max-concurrent`，并且必须同时满足队列数量、字节与帧预算；超限会在写入后端前拒绝。混有通知的 batch 无法为所有成员提供请求错误，因此预算拒绝会结束连接。`per-call` 模式额外拒绝含 `tools/call` 的 batch，具体行为见上文。
 
 | 协议配置 | 稳定连接内 | 替换进程时 |
 |---|---|---|
@@ -138,6 +158,7 @@ gopls-mcp-proxy \
 
 | 参数 | 默认值 | 含义 |
 |---|---|---|
+| `--refresh-mode` | `on-change` | `on-change` 按输入变化刷新；`per-call` 为每个独立 `tools/call` 启动新后端 |
 | `--watch-root` | 无 | 额外输入文件或目录，可重复；cwd 始终纳入 |
 | `--include` / `--exclude` | 无 | 输入 glob，可重复 |
 | `--go-discovery` | `false` | 可选 Go 工作区发现 |
@@ -149,11 +170,11 @@ gopls-mcp-proxy \
 | `--shutdown-timeout` | `2s` | 关闭 stdin 后、TERM 后各自等待上限 |
 | `--refresh-timeout` | `60s` | 从首个确认失效开始的一轮恢复预算 |
 | `--cleanup-timeout` | `6s` | 最后资源清理预算 |
-| `--request-timeout` | `110s` | 有限请求排队、扫描、执行的总期限 |
+| `--request-timeout` | `110s` | 有限请求排队、扫描、重建、执行的总期限 |
 | `--queue-limit` | `64` | 待派发请求数，batch 按请求成员计数 |
 | `--queue-bytes` | `67108864` | 字节预算，64 MiB |
 | `--max-frame-bytes` | `16777216` | 单帧上限，16 MiB |
-| `--max-concurrent` | `8` | 普通有限请求并发上限 |
+| `--max-concurrent` | `8` | 普通有限请求并发上限；`per-call` 工具调用始终串行 |
 | `--retry-min` / `--retry-max` | `1s` / `30s` | 有上限的恢复退避 |
 | `--help` / `--version` | — | 输出代理帮助或版本后退出 |
 

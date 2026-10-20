@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Require actual, successful default-launcher executions in go test JSON."""
+"""Require successful default-launcher and per-call executions in go test JSON."""
 import json
 from pathlib import Path
 import re
@@ -11,19 +11,26 @@ def main():
     kind, log = sys.argv[1:]
     if kind == "unit":
         paths = [root / "cmd/gopls-mcp-proxy/main_test.go", *sorted((root / "internal/launcher").glob("*_test.go"))]
-        required = {"TestDefaultGoplsIntent", "TestIdentityChecksStartupAndCurrentInodes"}
+        per_call_path = root / "internal/proxy/per_call_test.go"
+        required = {"TestDefaultGoplsIntent", "TestIdentityChecksStartupAndCurrentInodes", "TestPerCallSchedulerWaitsForRequestAndResponseDelivery"}
         prefix = "Test"
     elif kind == "raw":
         paths = sorted((root / "integration").glob("default_launcher*_test.go"))
-        required = {"TestRawDefaultLauncherFixtureNeverRefreshesItself", "TestRawDefaultLauncherRefreshAndNoReplay"}
-        prefix = "TestRawDefaultLauncher"
+        per_call_path = root / "integration/per_call_test.go"
+        required = {"TestRawDefaultLauncherFixtureNeverRefreshesItself", "TestRawDefaultLauncherRefreshAndNoReplay", "TestRawPerCallDefaultLauncherFreshBackends"}
+        prefix = "TestRaw"
     elif kind == "real":
         paths = [root / "integration/real_gopls_test.go"]
-        required = {"TestRealGoplsDefaultLauncherTwoProtobufUpgrades"}
+        per_call_path = root / "integration/per_call_real_gopls_test.go"
+        required = {"TestRealGoplsDefaultLauncherTwoProtobufUpgrades", "TestRealGoplsPerCallFreshProcessAndFileChanges"}
         prefix = "TestRealGopls"
     else:
         raise SystemExit("expected unit, raw, or real")
-    names = {name for path in paths for name in re.findall(r"^func (Test\w+)\(t \*testing.T\)", path.read_text(), re.M) if name.startswith(prefix)}
+    pattern = r"^func (Test\w+)\(t \*testing.T\)"
+    per_call_names = {name for name in re.findall(pattern, per_call_path.read_text(), re.M) if name.startswith(prefix)}
+    if not per_call_names:
+        raise SystemExit(f"per-call tests missing from source: {per_call_path}")
+    names = {name for path in paths for name in re.findall(pattern, path.read_text(), re.M) if name.startswith(prefix)} | per_call_names
     if not required <= names:
         raise SystemExit(f"required launcher tests missing from source: {sorted(required - names)}")
     actions = {}
