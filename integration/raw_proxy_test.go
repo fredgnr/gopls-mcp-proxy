@@ -315,22 +315,39 @@ func (f *fixture) proxyFlags(t *testing.T, extraFlags []string, args ...string) 
 }
 func (f *fixture) events(t *testing.T) []testbackend.Event {
 	t.Helper()
-	raw, err := os.ReadFile(f.evidence)
-	if os.IsNotExist(err) {
-		return nil
-	}
+	events, err := readFixtureEvents(f.evidence)
 	if err != nil {
 		t.Fatal(err)
 	}
+	return events
+}
+
+// The helper creates this file before its first write and appends JSONL while
+// tests poll it. Only a newline-terminated record is ready to be inspected; an
+// empty file or an unfinished tail must wait for the next poll. Completed
+// records remain strict so corrupt evidence cannot silently pass assertions.
+func readFixtureEvents(path string) ([]testbackend.Event, error) {
+	raw, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
 	var events []testbackend.Event
-	for _, line := range bytes.Split(bytes.TrimSpace(raw), []byte{'\n'}) {
+	for lineNumber := 1; ; lineNumber++ {
+		line, rest, complete := bytes.Cut(raw, []byte{'\n'})
+		if !complete {
+			break
+		}
 		var event testbackend.Event
 		if err := json.Unmarshal(line, &event); err != nil {
-			t.Fatal(err)
+			return nil, fmt.Errorf("decode fixture event %s:%d: %w", path, lineNumber, err)
 		}
 		events = append(events, event)
+		raw = rest
 	}
-	return events
+	return events, nil
 }
 func (f *fixture) waitExecution(t *testing.T, method string) {
 	t.Helper()
