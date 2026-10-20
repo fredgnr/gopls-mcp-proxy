@@ -408,6 +408,12 @@ func recoveryCapabilityShape(revision string, server bool) recoveryCapabilityFie
 			shape["completions"] = empty
 		}
 	} else {
+		// Codex advertises this empty marker even to servers that do not
+		// implement auth-change notifications. Preserve the client declaration
+		// verbatim; it adds no backend state unless the server opts in too.
+		// Server opt-in remains unsupported: recovering it would also require
+		// restoring notifications/codex/authChanged, not just initialize.
+		shape["experimental"] = recoveryCapabilityFields{"codex/auth-change": empty}
 		shape["roots"] = recoveryCapabilityFields{"listChanged": nil}
 		shape["sampling"] = empty
 		if revision == "2025-06-18" || revision == "2025-11-25" {

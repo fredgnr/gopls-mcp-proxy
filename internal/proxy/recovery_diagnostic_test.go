@@ -20,7 +20,7 @@ func TestRecoveryCodexInitializationPreservesKnownCapabilities(t *testing.T) {
 		for _, elicitation := range []string{`{}`, `{"form":{}}`, `{"url":{}}`, `{"form":{},"url":{}}`} {
 			t.Run(versions.requested+"/"+versions.negotiated+"/"+elicitation, func(t *testing.T) {
 				r := &Recovery{}
-				request := fmt.Sprintf(`{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":%q,"clientInfo":{"name":"codex-mcp-client","title":"Codex","version":"0.163.0"},"capabilities":{"elicitation":%s}}}`, versions.requested, elicitation)
+				request := fmt.Sprintf(`{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":%q,"clientInfo":{"name":"codex-mcp-client","title":"Codex","version":"0.163.0"},"capabilities":{"experimental":{"codex/auth-change":{}},"elicitation":%s}}}`, versions.requested, elicitation)
 				response := fmt.Sprintf(`{"jsonrpc":"2.0","id":0,"result":{"protocolVersion":%q,"serverInfo":{"name":"gopls","version":"v0.23.0"},"capabilities":{"tools":{}}}}`, versions.negotiated)
 				r.ObserveResponse(recoveryMessage(t, request), recoveryMessage(t, response))
 				diagnostic, exists := r.InitializationDiagnostic()
@@ -68,6 +68,14 @@ func TestRecoveryInitializationDiagnosticPathsAndReasons(t *testing.T) {
 		name, side, path, value, reason, actualType string
 		parts                                       []string
 	}{
+		{"auth-nonempty", "client", `params.capabilities.experimental["codex/auth-change"].sessionToken`, `{"experimental":{"codex/auth-change":{"sessionToken":"TOP_SECRET_VALUE"}}}`, "nonempty_static_declaration", "string", []string{"params", "capabilities"}},
+		{"auth-null", "client", `params.capabilities.experimental["codex/auth-change"]`, `{"experimental":{"codex/auth-change":null}}`, "invalid_type", "null", []string{"params", "capabilities"}},
+		{"auth-array", "client", `params.capabilities.experimental["codex/auth-change"]`, `{"experimental":{"codex/auth-change":[]}}`, "invalid_type", "array", []string{"params", "capabilities"}},
+		{"auth-boolean", "client", `params.capabilities.experimental["codex/auth-change"]`, `{"experimental":{"codex/auth-change":true}}`, "invalid_type", "boolean", []string{"params", "capabilities"}},
+		{"auth-string", "client", `params.capabilities.experimental["codex/auth-change"]`, `{"experimental":{"codex/auth-change":"TOP_SECRET_VALUE"}}`, "invalid_type", "string", []string{"params", "capabilities"}},
+		{"auth-number", "client", `params.capabilities.experimental["codex/auth-change"]`, `{"experimental":{"codex/auth-change":1}}`, "invalid_type", "number", []string{"params", "capabilities"}},
+		{"auth-server", "server", `result.capabilities.experimental["codex/auth-change"]`, `{"experimental":{"codex/auth-change":{}}}`, "nonempty_static_declaration", "object", []string{"result", "capabilities"}},
+		{"unknown-experimental", "client", `params.capabilities.experimental["vendor/state"]`, `{"experimental":{"codex/auth-change":{},"vendor/state":{}}}`, "no_recovery_rule", "object", []string{"params", "capabilities"}},
 		{"unknown-mode", "client", "params.capabilities.elicitation.unknownMode", `{"elicitation":{"unknownMode":{}}}`, "no_recovery_rule", "object", []string{"params", "capabilities"}},
 		{"nonempty-form", "client", "params.capabilities.elicitation.form.unknown", `{"elicitation":{"form":{"unknown":true}}}`, "nonempty_static_declaration", "boolean", []string{"params", "capabilities"}},
 		{"nonempty-url", "client", "params.capabilities.elicitation.url.sessionToken", `{"elicitation":{"url":{"sessionToken":"TOP_SECRET_VALUE"}}}`, "nonempty_static_declaration", "string", []string{"params", "capabilities"}},
@@ -100,7 +108,7 @@ func TestRecoveryInitializationDiagnosticPathsAndReasons(t *testing.T) {
 			if !exists || d.Side != tc.side || d.Path != tc.path || d.Reason != tc.reason || d.ActualType != tc.actualType || d.RequestedVersion != "2025-11-25" {
 				t.Fatalf("unexpected diagnostic: %+v, exists=%v", d, exists)
 			}
-			if err := r.Preflight(); !errors.Is(err, ErrReconnectRequired) || !strings.Contains(err.Error(), d.Path) || strings.Contains(err.Error(), "TOP_SECRET_VALUE") {
+			if err := r.Preflight(); !errors.Is(err, ErrReconnectRequired) || !strings.Contains(err.Error(), fmt.Sprintf("%q", d.Path)) || strings.Contains(err.Error(), "TOP_SECRET_VALUE") {
 				t.Fatalf("unsafe or missing failure detail: %v", err)
 			}
 			// The same known failure must stop Recover before any I/O. Calling

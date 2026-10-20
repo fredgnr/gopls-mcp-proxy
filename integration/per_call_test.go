@@ -92,7 +92,7 @@ func TestRawPerCallOptInOnly(t *testing.T) {
 
 // The fixture reads files only at boot, so both modes must prove replacement
 // independently of gopls's own file watching. Replayed initialization must retain
-// the original client identity and the known static elicitation declarations.
+// the original client identity, elicitation declarations and auth-change marker.
 func TestRawCodexRecoveryAcrossRefreshModes(t *testing.T) {
 	for _, mode := range []string{"per-call", "on-change"} {
 		t.Run(mode, func(t *testing.T) {
@@ -139,10 +139,91 @@ func TestRawCodexRecoveryAcrossRefreshModes(t *testing.T) {
 				t.Fatalf("expected exactly three dispatched calls without replay: %+v", executions)
 			}
 			p.shutdown()
+			requireRecoverableInitialization(t, p.log)
 			for _, event := range f.events(t) {
 				if event.Kind == "boot" {
 					requireBackendExited(t, event.PID)
 				}
+			}
+		})
+	}
+}
+
+// Only Codex's empty client marker has a recovery rule. A future stateful
+// declaration must not be silently dropped or accepted by the narrow exception.
+func TestRawCodexAuthChangeRejectsStatefulDeclaration(t *testing.T) {
+	for _, mode := range []string{"per-call", "on-change"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newFixture(t)
+			p := f.proxyFlags(t, []string{"--refresh-mode", mode})
+			const secret = "AUTH_TOKEN_MUST_NOT_LEAK"
+			params := `{"protocolVersion":"2025-06-18","clientInfo":{"name":"future-client","version":"1"},"capabilities":{"experimental":{"codex/auth-change":{"sessionToken":"` + secret + `"}}}}`
+			raw := p.call(`"initialize-stateful"`, "initialize", params)
+			if mode == "on-change" {
+				if bytes.Contains(raw, []byte(`"error"`)) {
+					t.Fatalf("on-change initial handshake should preserve upstream result: %s", raw)
+				}
+				p.send(`{"jsonrpc":"2.0","method":"notifications/initialized"}`)
+				if snapshot := p.snapshot("1", false); !bytes.Contains(snapshot.Initialize, []byte(secret)) {
+					t.Fatalf("unsupported initialization was rewritten: %s", snapshot.Initialize)
+				}
+				writeInput(t, f.inputs[0], "B", true)
+				raw = p.call(`"blocked-tool"`, "tools/call", `{"name":"future_tool","arguments":null}`)
+			}
+			var response struct {
+				Result json.RawMessage `json:"result"`
+				Error  struct {
+					Message string `json:"message"`
+					Data    struct {
+						RequestDispatched       bool `json:"requestDispatched"`
+						BackendResponseReceived bool `json:"backendResponseReceived"`
+						AutomaticReplay         bool `json:"automaticReplay"`
+						Recovery                struct {
+							Path       string `json:"path"`
+							Reason     string `json:"reason"`
+							ActualType string `json:"actual_type"`
+						} `json:"recovery"`
+					} `json:"data"`
+				} `json:"error"`
+			}
+			if err := json.Unmarshal(raw, &response); err != nil {
+				t.Fatal(err)
+			}
+			data := response.Error.Data
+			if len(response.Result) != 0 || !bytes.Contains([]byte(response.Error.Message), []byte("protocol_restart_required")) ||
+				data.Recovery.Path != `params.capabilities.experimental["codex/auth-change"].sessionToken` ||
+				data.Recovery.Reason != "nonempty_static_declaration" || data.Recovery.ActualType != "string" {
+				t.Fatalf("missing precise initialization rejection: %s", raw)
+			}
+			dispatched := mode == "per-call" // Only the initialize reached the backend.
+			if data.RequestDispatched != dispatched || data.BackendResponseReceived != dispatched || data.AutomaticReplay {
+				t.Fatalf("incorrect dispatch accounting: %s", raw)
+			}
+			select {
+			case extra, open := <-p.frames:
+				if open {
+					t.Fatalf("unexpected response after terminal initialization rejection: %s", extra)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("initialization rejection did not close the frontend within its cleanup budget")
+			}
+			p.shutdown()
+			logs, err := os.ReadFile(p.log)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if bytes.Contains(raw, []byte(secret)) || bytes.Contains(logs, []byte(secret)) {
+				t.Fatal("initialization rejection leaked a capability value")
+			}
+			boots := 0
+			for _, event := range f.events(t) {
+				if event.Kind == "boot" {
+					boots++
+					requireBackendExited(t, event.PID)
+				}
+			}
+			if boots != 1 || len(perCallExecutions(t, f)) != 0 {
+				t.Fatalf("unsupported declaration started a replacement or dispatched a tool: boots=%d calls=%+v", boots, perCallExecutions(t, f))
 			}
 		})
 	}
