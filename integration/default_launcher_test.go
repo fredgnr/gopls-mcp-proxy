@@ -527,6 +527,15 @@ func TestRawDefaultLauncherProxyOptionsAndExternalInputs(t *testing.T) {
 	if err := os.Mkdir(outside, 0700); err != nil {
 		t.Fatal(err)
 	}
+	// This case tests an ordinary external directory. macOS TempDir may use
+	// the /var alias; retaining that incidental symlink would additionally
+	// watch its ancestor /, introducing unrelated root-directory events.
+	// Explicit proxy symlink layouts are tested separately above.
+	var err error
+	outside, err = filepath.EvalSymlinks(outside)
+	if err != nil {
+		t.Fatal(err)
+	}
 	input := filepath.Join(outside, "external.txt")
 	if err := os.WriteFile(input, []byte("A"), 0600); err != nil {
 		t.Fatal(err)

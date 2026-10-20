@@ -79,6 +79,10 @@
 
 ## CI 与证据复核
 
+首轮实现提交 `b0ff06a3d8e86771bb20f52d5d7839424c3bf1ec` 的 [PR run 39364927320](https://github.com/fredgnr/gopls-mcp-proxy/actions/runs/39364927320) 与 [push run 39364923356](https://github.com/fredgnr/gopls-mcp-proxy/actions/runs/39364923356) 中，Linux Go 1.25.x/1.27.2 和四目标打包通过；macOS raw 的普通外部 watch-root 用例失败，未记为平台通过。
+
+macOS artifact 显示 cwd 为 `/private/var/...`，测试额外根却保留 `/var/...` 别名。既有监测器按契约监听符号链接祖先，因而尝试监听 `/`，并记录 `/.VolumeIcon.icns` 不存在的注册错误；首次 initialize 随后因 filesystem_event 返回 workspace_changed。事件日志没有路径，不能断言具体是哪一个系统事件触发。修复只将这个普通外部目录夹具通过 EvalSymlinks 转为物理路径，保留真实外部根、全部 watcher/预算、生产核心和独立符号链接用例。修复后的最终提交与平台矩阵见 PR 检查。
+
 `source.json` 保存实际 HEAD/tree、工作树、平台/权限身份、Go、run ID/attempt。各阶段 `unit.json`、`raw-contract.json`、`real-gopls.json` 保留实际执行情况；`launcher-{unit,raw,real}.json` 检查测试存在、已 run、已 pass，出现 skip/fail 或未执行立即失败。原始 fixture 事件、stderr、launch JSON、二进制哈希与真实应用消息保存在 runner 临时目录并统一上传。
 
 使用原有 CI 矩阵和四目标 `release-dist` 构建；权限保持 `contents: read`、`persist-credentials: false`、固定 Actions SHA。不添加 `pull_request_target`、tag、Release 或发布动作。最终 PR 摘要登记提交/树和运行链接，使后续 HEAD 漂移时能明确区分证据对应版本。
