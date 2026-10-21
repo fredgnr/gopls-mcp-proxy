@@ -21,6 +21,18 @@ var codexInitializeFixture string
 
 var codexInitializeParams = strings.TrimSpace(codexInitializeFixture)
 
+// Taken from the independent stdio reproduction in the 2026-10-21 incident
+// report, not a capture of the user's live Codex initialize request. Keep the
+// earlier source-reconstructed Codex fixture unchanged as a separate control.
+//
+//go:embed testdata/empty-extensions-20261021-initialize.json
+var emptyExtensionsInitializeFixture string
+
+var emptyExtensionsInitializeParams = strings.TrimSpace(emptyExtensionsInitializeFixture)
+
+// The report's control differs only by omission of the empty extensions map.
+var omittedExtensionsInitializeParams = strings.Replace(emptyExtensionsInitializeParams, `,"extensions":{}`, "", 1)
+
 func expectedGoplsVersion(t *testing.T) string {
 	t.Helper()
 	version := os.Getenv("GOPLS_EXPECTED_VERSION")

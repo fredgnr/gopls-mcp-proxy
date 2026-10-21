@@ -113,3 +113,20 @@ python3 scripts/check-launcher-tests.py real /tmp/real-gopls.json
 提供定义 → 删除定义文件”确认诊断随磁盘状态更新。每次必要的刷新都检查 boot/PID/generation
 及旧进程退出，关闭前后工具目录保持一致。现有 CI 会在 Linux/macOS、gopls v0.23.0/v0.24.0
 组合中执行这些真实后端用例。
+
+## 空 extensions 初始化恢复回归
+
+`testdata/empty-extensions-20261021-initialize.json` 来自 2026-10-21 报告的独立 stdio
+复现请求，包含 `extensions: {}`、`experimental: {"codex/auth-change": {}}` 和
+`elicitation.form/url`。该 fixture 与历史 Codex 源码 fixture 分开保存；它不代表真实
+Codex 连接的完整抓包。
+
+`TestRawEmptyExtensionsRecoveryAcrossRefreshModes` 对照仅省略 `extensions` 的请求与
+空对象请求，在 `per-call` / `on-change` 两种模式下验证：初始转发和每次恢复后的参数
+字节一致，连续工具调用正常，文件变化触发必要的进程替换，旧进程退出，且没有业务重放。
+`TestRawExtensionsRejectsUnsupportedDeclaration` 确认未知非空扩展（即使其值为 `{}`）、
+带状态的扩展和 `null` 不会因空对象兼容规则而被放行；拒绝仍发生在原定阶段，且不泄露值。
+
+`TestRealGoplsEmptyExtensionsRecovery` 使用报告输入，在两种模式下复用真实后端验收，
+连续执行 `go_workspace`、`go_file_context`、`go_diagnostics`，再验证文件增删改后的
+搜索与诊断。现有 Linux/macOS、gopls v0.23.0/v0.24.0 CI 矩阵及执行门禁包含这些用例。

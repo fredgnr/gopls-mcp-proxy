@@ -29,6 +29,16 @@ func TestRealGoplsCodexRecovery(t *testing.T) {
 	}
 }
 
+// The report's exact capabilities must survive repeated per-call restarts and
+// on-change recovery with a real backend, including the three reported tools.
+func TestRealGoplsEmptyExtensionsRecovery(t *testing.T) {
+	for _, mode := range []string{"per-call", "on-change"} {
+		t.Run(mode, func(t *testing.T) {
+			testRealGoplsFileChanges(t, mode, emptyExtensionsInitializeParams)
+		})
+	}
+}
+
 func testRealGoplsFileChanges(t *testing.T, mode, initializeParams string) {
 	if os.Getenv("GOPLS_INTEGRATION") != "1" {
 		t.Skip("set GOPLS_INTEGRATION=1; dedicated interoperability CI must enable this test")
