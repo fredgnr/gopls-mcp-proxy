@@ -94,13 +94,32 @@ func TestRawPerCallOptInOnly(t *testing.T) {
 // independently of gopls's own file watching. Replayed initialization must retain
 // the original client identity, elicitation declarations and auth-change marker.
 func TestRawCodexRecoveryAcrossRefreshModes(t *testing.T) {
+	testRawInitializationRecoveryAcrossRefreshModes(t, codexInitializeParams)
+}
+
+func TestRawEmptyExtensionsRecoveryAcrossRefreshModes(t *testing.T) {
+	if omittedExtensionsInitializeParams == emptyExtensionsInitializeParams {
+		t.Fatal("report control did not omit extensions; update the fixture transformation")
+	}
+	for _, tc := range []struct{ name, params string }{
+		{"omitted", omittedExtensionsInitializeParams},
+		{"empty", emptyExtensionsInitializeParams},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testRawInitializationRecoveryAcrossRefreshModes(t, tc.params)
+		})
+	}
+}
+
+func testRawInitializationRecoveryAcrossRefreshModes(t *testing.T, initializeParams string) {
+	t.Helper()
 	for _, mode := range []string{"per-call", "on-change"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newFixture(t)
 			p := f.proxyFlags(t, []string{"--refresh-mode", mode})
-			initialized := p.call("100", "initialize", codexInitializeParams)
+			initialized := p.call("100", "initialize", initializeParams)
 			if bytes.Contains(initialized, []byte(`"error"`)) || !bytes.Contains(initialized, []byte(`"protocolVersion":"2025-06-18"`)) {
-				t.Fatalf("Codex fixture initialize: %s", initialized)
+				t.Fatalf("fixture initialize: %s", initialized)
 			}
 			p.send(`{"jsonrpc":"2.0","method":"notifications/initialized"}`)
 			initial := p.snapshot("0", false)
@@ -120,7 +139,7 @@ func TestRawCodexRecoveryAcrossRefreshModes(t *testing.T) {
 			requirePerCallBoot(t, second, third)
 			requireBackendExited(t, second.PID)
 			requireInput(t, third, "main.go", "B")
-			for _, snapshot := range []testbackend.Snapshot{first, second, third} {
+			for _, snapshot := range []testbackend.Snapshot{initial, first, second, third} {
 				var request struct {
 					Method string          `json:"method"`
 					Params json.RawMessage `json:"params"`
@@ -128,8 +147,8 @@ func TestRawCodexRecoveryAcrossRefreshModes(t *testing.T) {
 				if err := json.Unmarshal(snapshot.Initialize, &request); err != nil {
 					t.Fatal(err)
 				}
-				if request.Method != "initialize" || !rawJSONEqual(request.Params, []byte(codexInitializeParams)) {
-					t.Fatalf("Codex initialization changed across refresh: %s", snapshot.Initialize)
+				if request.Method != "initialize" || !bytes.Equal(request.Params, []byte(initializeParams)) {
+					t.Fatalf("initialization changed across refresh: %s", snapshot.Initialize)
 				}
 			}
 			if after := p.call(`"catalogue"`, "tools/list", `{}`); !rawJSONEqual(catalogue, after) {
@@ -152,19 +171,39 @@ func TestRawCodexRecoveryAcrossRefreshModes(t *testing.T) {
 // Only Codex's empty client marker has a recovery rule. A future stateful
 // declaration must not be silently dropped or accepted by the narrow exception.
 func TestRawCodexAuthChangeRejectsStatefulDeclaration(t *testing.T) {
+	testRawRejectedInitialization(t,
+		`{"experimental":{"codex/auth-change":{"sessionToken":"RECOVERY_TOKEN_MUST_NOT_LEAK"}}}`,
+		`params.capabilities.experimental["codex/auth-change"].sessionToken`,
+		"nonempty_static_declaration", "string")
+}
+
+func TestRawExtensionsRejectsUnsupportedDeclaration(t *testing.T) {
+	for _, tc := range []struct{ name, capabilities, path, reason, actualType string }{
+		{"unknown_marker", `{"extensions":{"future/extension":{}}}`, `params.capabilities.extensions["future/extension"]`, "nonempty_static_declaration", "object"},
+		{"stateful", `{"extensions":{"future/extension":{"token":"RECOVERY_TOKEN_MUST_NOT_LEAK"}}}`, `params.capabilities.extensions["future/extension"]`, "nonempty_static_declaration", "object"},
+		{"null", `{"extensions":null}`, "params.capabilities.extensions", "invalid_type", "null"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testRawRejectedInitialization(t, tc.capabilities, tc.path, tc.reason, tc.actualType)
+		})
+	}
+}
+
+func testRawRejectedInitialization(t *testing.T, capabilities, path, reason, actualType string) {
+	t.Helper()
 	for _, mode := range []string{"per-call", "on-change"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newFixture(t)
 			p := f.proxyFlags(t, []string{"--refresh-mode", mode})
-			const secret = "AUTH_TOKEN_MUST_NOT_LEAK"
-			params := `{"protocolVersion":"2025-06-18","clientInfo":{"name":"future-client","version":"1"},"capabilities":{"experimental":{"codex/auth-change":{"sessionToken":"` + secret + `"}}}}`
+			const secret = "RECOVERY_TOKEN_MUST_NOT_LEAK"
+			params := `{"protocolVersion":"2025-06-18","clientInfo":{"name":"future-client","version":"1"},"capabilities":` + capabilities + `}`
 			raw := p.call(`"initialize-stateful"`, "initialize", params)
 			if mode == "on-change" {
 				if bytes.Contains(raw, []byte(`"error"`)) {
 					t.Fatalf("on-change initial handshake should preserve upstream result: %s", raw)
 				}
 				p.send(`{"jsonrpc":"2.0","method":"notifications/initialized"}`)
-				if snapshot := p.snapshot("1", false); !bytes.Contains(snapshot.Initialize, []byte(secret)) {
+				if snapshot := p.snapshot("1", false); !bytes.Contains(snapshot.Initialize, []byte(`"capabilities":`+capabilities)) {
 					t.Fatalf("unsupported initialization was rewritten: %s", snapshot.Initialize)
 				}
 				writeInput(t, f.inputs[0], "B", true)
@@ -191,8 +230,7 @@ func TestRawCodexAuthChangeRejectsStatefulDeclaration(t *testing.T) {
 			}
 			data := response.Error.Data
 			if len(response.Result) != 0 || !bytes.Contains([]byte(response.Error.Message), []byte("protocol_restart_required")) ||
-				data.Recovery.Path != `params.capabilities.experimental["codex/auth-change"].sessionToken` ||
-				data.Recovery.Reason != "nonempty_static_declaration" || data.Recovery.ActualType != "string" {
+				data.Recovery.Path != path || data.Recovery.Reason != reason || data.Recovery.ActualType != actualType {
 				t.Fatalf("missing precise initialization rejection: %s", raw)
 			}
 			dispatched := mode == "per-call" // Only the initialize reached the backend.

@@ -146,6 +146,8 @@ gopls-mcp-proxy \
 
 `codex/auth-change` 的客户端空标记 `experimental: {"codex/auth-change": {}}` 可以原样恢复。非空内部对象、错误类型、其他未知实验扩展，以及服务端声明的同名能力仍不能恢复。服务端声明会启用额外的认证变更通知，需要独立的状态恢复机制，不能只重放初始化。[此次故障的根因、兼容边界与验证方法](docs/changes/codex-auth-change-recovery.md)包含上游源码依据。
 
+协商版本为 `2025-06-18` 或 `2025-11-25` 时，客户端的 `capabilities.extensions: {}` 也允许原样恢复：空映射没有声明具体扩展，因此不增加需要重建的扩展状态。这是一条显式的客户端兼容规则；字段省略与空对象都可恢复，但不会互相改写。当前没有支持的非空 `extensions` 声明；任何扩展键、`null`、数组及其他错误类型仍拒绝恢复，服务端声明及其他版本的规则不变。详见[空 extensions 修复说明](docs/changes/empty-extensions-recovery.md)。
+
 收到后端成功握手后，会在 stderr 记录初始化声明的恢复资格，包含 `requested_version`、`negotiated_version`、`recoverable`；拒绝时另有 `side`、`path`、`reason`、`actual_type`，不记录完整初始化报文或被拒绝的字段值。恢复资格仅说明初始化声明可重建，后续状态与候选后端仍需通过一致性检查。已知不可恢复状态会在启动替代后端前拒绝。
 
 分页 cursor、task ID、业务 handle 和 MRTR `requestState` 原样传递，但不保证跨进程有效。代理不重放创建这些状态的业务调用，也不把旧版反向请求翻译为现代 MRTR。

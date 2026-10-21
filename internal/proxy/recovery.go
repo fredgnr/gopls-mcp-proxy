@@ -417,6 +417,11 @@ func recoveryCapabilityShape(revision string, server bool) recoveryCapabilityFie
 		shape["roots"] = recoveryCapabilityFields{"listChanged": nil}
 		shape["sampling"] = empty
 		if revision == "2025-06-18" || revision == "2025-11-25" {
+			// Client compatibility rule for these negotiated legacy profiles:
+			// an empty extensions map declares no extension state to restore.
+			// Preserve it verbatim, as with an omitted map; no nonempty extension
+			// has a recovery rule here. This does not enable server extensions.
+			shape["extensions"] = empty
 			// Known static form/url declarations are also sent with June
 			// negotiation (for example by Codex). Replaying them verbatim
 			// does not upgrade the session or restore an elicitation call.
