@@ -291,12 +291,23 @@ func testRealLifecycle(t *testing.T, mode string, cycles int, killParent bool) {
 		return fmt.Sprintf("%x", sha256.Sum256(data))
 	}
 	buildInfo, _ := exec.CommandContext(ctx, "go", "version", "-m", gopls).CombinedOutput()
+	proxyBuildInfo, err := exec.CommandContext(ctx, "go", "version", "-m", cmd.Path).CombinedOutput()
+	if err != nil {
+		t.Fatalf("proxy build identity: %v %s", err, proxyBuildInfo)
+	}
+	proxyVersion, err := exec.CommandContext(ctx, cmd.Path, "--version").CombinedOutput()
+	if err != nil {
+		t.Fatalf("proxy version: %v %s", err, proxyVersion)
+	}
 	summary := map[string]any{
 		"mode":                  mode,
 		"cycles":                cycles,
 		"initial_parent_killed": killParent,
 		"gopls_version":         strings.TrimSpace(string(version)),
 		"gopls_build_info":      string(buildInfo),
+		"test_go_version":       runtime.Version(),
+		"proxy_build_info":      string(proxyBuildInfo),
+		"proxy_version":         strings.TrimSpace(string(proxyVersion)),
 		"gopls_path":            gopls, "gopls_sha256": digest(gopls), "proxy_sha256": digest(cmd.Path),
 		"os":                           runtime.GOOS,
 		"arch":                         runtime.GOARCH,

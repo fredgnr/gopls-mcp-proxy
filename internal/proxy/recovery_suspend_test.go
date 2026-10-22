@@ -204,3 +204,59 @@ func TestSuspendUnknownAndUncertainRecoveryState(t *testing.T) {
 	r.MarkUncertain(recoveryMessage(t, `{"jsonrpc":"2.0","id":2,"method":"resources/subscribe","params":{"uri":"file:///source.go"}}`))
 	requireSuspendBlocker(t, r, "unrecoverable_protocol_state")
 }
+
+func urlElicitationSession(t *testing.T) *Recovery {
+	t.Helper()
+	r := &Recovery{}
+	r.ObserveResponse(
+		recoveryMessage(t, `{"jsonrpc":"2.0","id":100,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{"elicitation":{"form":{},"url":{}}}}}`),
+		recoveryMessage(t, `{"jsonrpc":"2.0","id":100,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}}}}`),
+	)
+	r.ObserveRequest(recoveryMessage(t, `{"jsonrpc":"2.0","method":"notifications/initialized"}`))
+	requireSuspendAllowed(t, r) // A static URL capability is not an active flow.
+	return r
+}
+
+func TestSuspendURLElicitationIsStickyAndDoesNotChangeForcedRefresh(t *testing.T) {
+	for _, tc := range []struct{ name, response, backend string }{
+		{"required error", `{"jsonrpc":"2.0","id":2,"error":{"code":-32042,"message":"URL required","data":{"elicitations":[{"mode":"url","elicitationId":"TOP_SECRET","url":"https://example.invalid/TOP_SECRET","message":"Continue in browser"}]}}}`, ""},
+		// The reserved code itself asserts an unresolved URL obligation. A
+		// malformed/missing list cannot safely prove that there is no state.
+		{"required error missing data", `{"jsonrpc":"2.0","id":2,"error":{"code":-32042,"message":"URL required"}}`, ""},
+		{"reverse URL request", "", `{"jsonrpc":"2.0","id":3,"method":"elicitation/create","params":{"mode":"url","elicitationId":"TOP_SECRET","url":"https://example.invalid/TOP_SECRET","message":"Continue in browser"}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := urlElicitationSession(t)
+			if tc.response != "" {
+				r.ObserveResponse(recoveryMessage(t, `{"jsonrpc":"2.0","id":2,"method":"tools/call"}`), recoveryMessage(t, tc.response))
+			} else {
+				r.ObserveBackend(recoveryMessage(t, tc.backend))
+			}
+			requireSuspendBlocker(t, r, "url_elicitation_state")
+			if !r.NeedsResident() || strings.Contains(strings.Join(r.SuspendBlockers(), ","), "TOP_SECRET") {
+				t.Fatal("URL obligation lost or diagnostic leaked native state")
+			}
+			if err := r.Preflight(); err != nil {
+				t.Fatalf("URL blocker changed forced refresh semantics: %v", err)
+			}
+			clone := r.Clone()
+			requireSuspendBlocker(t, clone, "url_elicitation_state")
+			clone.ObserveBackend(recoveryMessage(t, `{"jsonrpc":"2.0","method":"notifications/elicitation/complete","params":{"elicitationId":"TOP_SECRET"}}`))
+			requireSuspendBlocker(t, clone, "url_elicitation_state")
+		})
+	}
+}
+
+func TestSuspendURLElicitationIgnoresFormAndOpaquePayloads(t *testing.T) {
+	r := urlElicitationSession(t)
+	r.ObserveBackend(recoveryMessage(t, `{"jsonrpc":"2.0","id":3,"method":"elicitation/create","params":{"mode":"form","message":"Enter name","requestedSchema":{"type":"object","properties":{"name":{"type":"string"}}}}}`))
+	request := recoveryMessage(t, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"arguments":{"mode":"url","error":{"code":-32042}}}}`)
+	r.ObserveRequest(request)
+	for _, response := range []string{
+		`{"jsonrpc":"2.0","id":2,"result":{"structuredContent":{"error":{"code":-32042,"data":{"elicitations":[]}},"mode":"url"}}}`,
+		`{"jsonrpc":"2.0","id":2,"error":{"code":-1,"message":"business error","data":{"elicitations":[{"mode":"url"}]}}}`,
+	} {
+		r.ObserveResponse(request, recoveryMessage(t, response))
+	}
+	requireSuspendAllowed(t, r)
+}

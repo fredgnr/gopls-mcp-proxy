@@ -19,6 +19,7 @@ const (
 	suspendUnknownClientNotification
 	suspendUnknownServerNotification
 	suspendUnknownResult
+	suspendURLElicitation
 )
 
 // SuspendBlockers describes why voluntarily retiring a healthy backend would
@@ -63,6 +64,7 @@ func (r *Recovery) SuspendBlockers() []string {
 		{suspendUnknownClientNotification, "unknown_client_notification"},
 		{suspendUnknownServerNotification, "unknown_server_notification"},
 		{suspendUnknownResult, "unknown_result_type"},
+		{suspendURLElicitation, "url_elicitation_state"},
 	} {
 		if r.suspendState&flag.state != 0 {
 			blockers = append(blockers, flag.reason)
@@ -120,6 +122,15 @@ func (r *Recovery) observeSuspendRequest(m wire.Message) {
 func (r *Recovery) observeSuspendResponse(request, response wire.Message) {
 	// Do not infer state from arbitrary content or tool arguments. Only fixed
 	// protocol envelope fields are inspected; native bytes remain untouched.
+	if raw, ok := wire.Get(response.Raw, "error", "code"); ok {
+		var code int
+		if json.Unmarshal(raw, &code) == nil && code == -32042 {
+			// URLElicitationRequiredError means the original operation cannot
+			// proceed until an out-of-band URL interaction is completed. Its
+			// terminal JSON-RPC error is not the end of that interaction.
+			r.suspendState |= suspendURLElicitation
+		}
+	}
 	if hasProtocolField(response.Raw, "result", "task") || hasProtocolField(response.Raw, "result", "_meta", "io.modelcontextprotocol/related-task") {
 		r.suspendState |= suspendTasks
 	}
@@ -160,6 +171,14 @@ func (r *Recovery) observeSuspendResponse(request, response wire.Message) {
 func (r *Recovery) ObserveBackend(m wire.Message) {
 	if m.Kind == wire.Response {
 		return
+	}
+	if m.Kind == wire.Request && m.Method == "elicitation/create" {
+		if mode, ok := recoveryString(m.Raw, "params", "mode"); ok && mode == "url" {
+			// An accept reply only consents to opening the URL. Keep this
+			// session-level blocker even after the reverse RPC completes;
+			// neither native URLs nor opaque elicitation IDs need retention.
+			r.suspendState |= suspendURLElicitation
+		}
 	}
 	if isTaskMethod(m.Method) || hasProtocolField(m.Raw, "params", "task") || hasProtocolField(m.Raw, "params", "_meta", "io.modelcontextprotocol/related-task") {
 		r.suspendState |= suspendTasks

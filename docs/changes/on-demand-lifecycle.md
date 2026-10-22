@@ -24,7 +24,7 @@
 
 每个工具队项仍须使用为该队项启动的新 boot；取消队项不能把其 fresh boot 转让给后续工具。普通请求唤醒的后端也不能直接作为下次工具调用的新后端。
 
-释放检查独立于刷新恢复预检查。未完成初始化、未闭合目录分页、显式资源订阅、现代长期订阅、任务能力或任务交互、`input_required`、未知与不确定状态会阻止自愿释放。无法证明已解除的条件在本前端会话内保持阻塞。它们不改变现有 per-call 强制刷新规则，也不承诺恢复任意进程内业务句柄。
+释放检查独立于刷新恢复预检查。未完成初始化、未闭合目录分页、显式资源订阅、现代长期订阅、任务能力或任务交互、`input_required`、URL elicitation、未知与不确定状态会阻止自愿释放。URL elicitation 的错误响应及反向请求都会记录持续状态；客户端接受打开 URL 不代表浏览器交互已经结束。无法证明已解除的条件在本前端会话内保持阻塞。它们不改变现有 per-call 强制刷新规则，也不承诺恢复任意进程内业务句柄。
 
 结果排入输出队列不等于完成交付；需要 writer 成功写出整个帧，并等待双向待写消息、扫描、反向请求、内部控制及结果缓冲结束。stdio 没有客户端消费 ACK，此处只保证写入管道成功。
 
@@ -49,6 +49,8 @@ RSS 按同一采样时点分组相加，不相加各进程在不同时间的峰�
 
 原有 resident/per-call 普通请求复用用例保留。新增 raw、组件及真实 gopls 生命周期用例，CI 保持 Linux/macOS × gopls v0.23.0/v0.24.0，完成性检查要求指定用例实际执行且通过；skip 不算通过。CI 保存测试 JSON、过程观测和版本信息。
 
+可复核记录存放在独立的[验证证据分支](https://github.com/fredgnr/gopls-mcp-proxy/tree/evidence/pr8-on-demand-20261022)，不作为产品代码合入。[原始 100 次循环记录](https://github.com/fredgnr/gopls-mcp-proxy/tree/dc7ac7b997922b601cc7755b928555584ca52748/original)保留了提交 `1f3d855` 的测试 JSON、源 tree 和 worktree、三组场景的 summary、完整进程采样及 proxy 日志，并提供 ZIP、逐文件 SHA-256 和重新执行的严格门禁输出。该次 resident/on-demand 各 100 次，主后端及 telemetry 分别为 101/101、102/102，故障场景为 5/5；on-demand 的 100 次休眠 FD 均为 6。原始 proxy build info 未保存的限制已明确标注，未用后来的值覆盖原记录。修复后验证在证据分支单独归档，以各自的源提交和二进制身份为准。
+
 ```sh
 # 确定性的协议、状态机和进程回收测试
 go test -race ./cmd/... ./internal/... -count=1
@@ -67,6 +69,6 @@ GOPLS_INTEGRATION=1 GOPLS_EXPECTED_VERSION=v0.24.0 GOPLS_LIFECYCLE_CYCLES=100 \
 
 手动工作流 `Lifecycle soak profile` 在两平台、两版 gopls 上执行延长测试。默认每种模式 100 次，允许 3–1000 次；它是小工作区、单会话的正确性与稳定性采样，不代替生产工作负载的内存收益实验。进程采样中的 `-1` FD 数表示平台不提供该观测；不能当作零。
 
-合入或启用前应完成真实后端至少 100 次工具调用循环，并在实际 Codex 连接验证连续调用。CI 和 fixture 结果不代替用户 Mac 的宿主验收。本次不修改本机 Codex 配置，也不承诺原采样中两个直连 gopls 的约 744 MiB 会被代理回收。
+合入前应完成至少一组真实后端 100 次工具调用及空闲恢复观测，并提供可复核的日志和结果。用户实际 Mac/Codex 连续调用与真实工作区收益验收另行记录，在修改宿主配置并正式启用 on-demand 前完成；CI 和 fixture 结果不替代这项宿主验收。本次不修改本机 Codex 配置，也不承诺原采样中两个直连 gopls 的约 744 MiB 会被代理回收。
 
 启用配置见 README。回退时改为 resident 并重新建立 MCP 连接；per-call 的每次新进程语义保留。

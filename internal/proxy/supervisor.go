@@ -608,7 +608,7 @@ func (r *relay) scanned(e scanDone) {
 		}
 		// The old process has already been reaped. Known unrecoverable state
 		// must not start a candidate that cannot initialize successfully.
-		if r.generation != 0 {
+		if r.needsProtocolRecovery() {
 			if err := r.recovery.Preflight(); err != nil {
 				r.failRecovery(err)
 				return
@@ -681,6 +681,14 @@ func (r *relay) scanned(e scanDone) {
 		}
 	}
 }
+
+// Publication counts physical generations, including an on-demand candidate
+// cancelled before its first dispatch. Such a process leaves no session to
+// restore; requiring legacy initialization would reject the next modern call.
+func (r *relay) needsProtocolRecovery() bool {
+	return r.generation != 0 && (!r.onDemand() || !r.recovery.IsPristine())
+}
+
 func (r *relay) started(e startDone) {
 	r.startCancel = nil
 	if e.err != nil {
@@ -723,7 +731,7 @@ func (r *relay) started(e startDone) {
 		r.stopCurrent("request_cancelled")
 		return
 	}
-	if r.generation == 0 {
+	if !r.needsProtocolRecovery() {
 		r.phase = "publishing"
 		return
 	}

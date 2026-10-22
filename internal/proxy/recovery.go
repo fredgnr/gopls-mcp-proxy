@@ -63,6 +63,16 @@ func (r *Recovery) NeedsRecovery() bool {
 	return r.revision != "" || len(r.initRequest) != 0
 }
 
+// IsPristine distinguishes an unused physical backend from a logical session.
+// In particular, unknown or uncertain state still requires the normal recovery
+// checks even if no request established a protocol revision or initialization.
+func (r *Recovery) IsPristine() bool {
+	return r.revision == "" && len(r.initRequest) == 0 && len(r.initResult) == 0 &&
+		r.initDiagnostic == (RecoveryDiagnostic{}) && len(r.initialized) == 0 &&
+		len(r.logLevel) == 0 && len(r.subscribed) == 0 && len(r.directories) == 0 &&
+		r.blocked == "" && r.suspendState == 0
+}
+
 func (r *Recovery) Clone() *Recovery {
 	c := *r
 	c.initRequest = bytes.Clone(r.initRequest)

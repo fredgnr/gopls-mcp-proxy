@@ -220,10 +220,12 @@ func TestOnDemandAbandonedStartStillHasCleanupDeadline(t *testing.T) {
 
 func TestOnDemandCanceledDispatchDoesNotPinPristineCandidate(t *testing.T) {
 	r := lifecycleRelay(t)
-	lifecycleProcess(t, r)
+	first := lifecycleProcess(t, r)
 	r.recovery = &Recovery{}
-	r.fromFront([]byte(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`))
+	r.startResult = make(chan startDone, 1)
+	r.fromFront([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"cancelled","_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}`))
 	q := r.queue[0]
+	cancelled := q.records[0]
 	r.scanning, r.scanSequence = true, 3
 	r.fromFront([]byte(`{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":1}}`))
 	r.advance()
@@ -236,6 +238,53 @@ func TestOnDemandCanceledDispatchDoesNotPinPristineCandidate(t *testing.T) {
 		t.Fatal("canceled dispatch revived the unused boot")
 	}
 	routerEmpty(t, r.back)
+	routerEmpty(t, r.front)
+	if cancelled.dispatched || r.generation != 1 {
+		t.Fatal("cancelled request dispatched or published generation was lost")
+	}
+
+	// A published physical process does not establish a logical protocol
+	// session. The next modern request must get a fresh boot on this same
+	// frontend, without attempting to restore a legacy initialization.
+	r.fromFront([]byte(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"successor","_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}`))
+	next := r.queue[0]
+	r.beginWake()
+	r.scanned(scanDone{purpose: "initial", snap: r.snapshot})
+	if r.phase != "starting" || r.closingErr != nil {
+		t.Fatalf("pristine successor did not start: phase=%s error=%v", r.phase, r.closingErr)
+	}
+	select {
+	case started := <-r.startResult:
+		if started.err != nil {
+			t.Fatal(started.err)
+		}
+		t.Cleanup(func() { _ = started.proc.Close() })
+		r.started(started)
+	case <-time.After(3 * time.Second):
+		t.Fatal("successor process did not start")
+	}
+	if r.phase != "publishing" || r.proc.ID == first.ID || next.freshBoot != r.proc.ID {
+		t.Fatalf("successor attempted recovery or reused cancelled boot: phase=%s", r.phase)
+	}
+	r.scanned(scanDone{purpose: "publish", snap: r.snapshot})
+	// Drive the new boot's wire delivery deterministically. The process reader
+	// and writer started above remain idle; no business call is sent to cat.
+	r.back = make(chan writeItem, 16)
+	r.scanned(scanDone{purpose: "dispatch", snap: r.snapshot, dispatch: next})
+	item := routerRead(t, r.back)
+	request := routerFrame(t, item.raw).Messages[0]
+	if request.ID.Key != "n:2" || !next.records[0].dispatched || cancelled.dispatched || r.generation != 2 {
+		t.Fatal("successor was not the only dispatched request in the new generation")
+	}
+	r.written(writeDone{boot: r.proc.ID, size: len(item.raw)})
+	r.fromBack([]byte(`{"jsonrpc":"2.0","id":2,"result":{"content":[]}}`))
+	routerDeliverFresh(r)
+	result := routerRead(t, r.front)
+	response := routerFrame(t, result.raw).Messages[0]
+	if response.ID.Key != "n:2" || len(r.pending) != 0 || r.fatal != nil || r.closingErr != nil {
+		t.Fatalf("successor did not complete on same frontend: %s", result.raw)
+	}
+	r.written(writeDone{size: len(result.raw)})
 	routerEmpty(t, r.front)
 }
 
@@ -252,6 +301,30 @@ func TestOnDemandFileEventsDuringCleanupDoNotRestartWakeBudget(t *testing.T) {
 	lifecycleStopped(t, r)
 	if r.phase != "idle" {
 		t.Fatal("file event restarted an otherwise dormant backend")
+	}
+}
+
+func TestOnDemandEmptyRevisionDoesNotBypassKnownRecoveryState(t *testing.T) {
+	for _, mode := range []string{"uncertain_initialization", "unknown_notification", "resident_compatibility"} {
+		t.Run(mode, func(t *testing.T) {
+			r := lifecycleRelay(t)
+			r.proc = nil
+			r.phase = "idle"
+			r.recovery = &Recovery{}
+			switch mode {
+			case "uncertain_initialization":
+				r.recovery.MarkUncertain(recoveryMessage(t, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`))
+			case "unknown_notification":
+				r.recovery.ObserveRequest(recoveryMessage(t, `{"jsonrpc":"2.0","method":"notifications/vendor/state"}`))
+			case "resident_compatibility":
+				r.cfg.BackendLifecycle = BackendResident
+			}
+			r.fromFront([]byte(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}`))
+			r.scanned(scanDone{purpose: "initial", snap: r.snapshot})
+			if r.phase != "closing" || !errors.Is(r.closingErr, ErrReconnectRequired) || r.startFinished != nil {
+				t.Fatalf("existing recovery requirement bypassed: phase=%s error=%v", r.phase, r.closingErr)
+			}
+		})
 	}
 }
 
