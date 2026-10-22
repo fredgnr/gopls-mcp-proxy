@@ -43,6 +43,6 @@ python3 scripts/check-lifecycle-tests.py real fixed/pr8-fixed/real.json fixed/pr
 
 包内 `auxiliary-pre-fix-reproductions/` 是在旧实现上新增确定性测试后取得的失败日志，**不是原始干净 HEAD 的运行**；这两次复现没有单独保存完整 worktree/tree/工具链元数据，因此只用于说明缺陷，不能代替本次修复提交的验收。
 
-[对应 GitHub CI](https://github.com/fredgnr/gopls-mcp-proxy/actions/runs/39748428008) 覆盖 Linux/macOS 与两版 gopls；索引创建时仍在执行，请以该 run 的结果为准。本地 100 次完整原始记录不依赖 CI artifact 保留期限。
+[对应 GitHub CI](https://github.com/fredgnr/gopls-mcp-proxy/actions/runs/39748428008) 已全部通过，覆盖 Linux/macOS × gopls v0.23.0/v0.24.0、Go 1.25 兼容性、组件/raw race、真实后端门禁及构建。运行 attempt、任务结果和 artifact 索引见 `ci-status.json`。本地 100 次完整原始记录不依赖 CI artifact 保留期限。
 
 这些是合成单会话、非 race 的正确性/稳定性数据，不构成生产内存收益结论，也没有执行用户实际 Mac/Codex 连续调用。后者在修改宿主配置并正式启用 on-demand 前另行完成。

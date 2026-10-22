@@ -1,0 +1,981 @@
+{
+  "recorded_at": "2026-10-22T08:42:22.055Z",
+  "source_commit": "4a3a95f98230f4ced6a13e973f1d89b6715220b2",
+  "run": {
+    "id": 39748428008,
+    "url": "https://github.com/fredgnr/gopls-mcp-proxy/actions/runs/39748428008",
+    "head_sha": "4a3a95f98230f4ced6a13e973f1d89b6715220b2",
+    "event": "pull_request",
+    "status": "completed",
+    "conclusion": "success",
+    "run_attempt": 1,
+    "created_at": "2026-10-22T08:31:54Z",
+    "updated_at": "2026-10-22T08:41:32Z"
+  },
+  "jobs": [
+    {
+      "id": 119722598629,
+      "name": "Test (ubuntu-latest, Go 1.25.x, gopls none)",
+      "status": "completed",
+      "conclusion": "success",
+      "run_id": 39748428008,
+      "logs_url": null,
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1
+        },
+        {
+          "name": "Collect workflow telemetry",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2
+        },
+        {
+          "name": "Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3
+        },
+        {
+          "name": "Run actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4
+        },
+        {
+          "name": "Test telemetry exporter",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5
+        },
+        {
+          "name": "Format",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6
+        },
+        {
+          "name": "Vet",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7
+        },
+        {
+          "name": "Record tested source and runner identity",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 8
+        },
+        {
+          "name": "Unit and protocol components (race)",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9
+        },
+        {
+          "name": "Raw backend independent refresh and protocol contract (required)",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10
+        },
+        {
+          "name": "Run go build ./cmd/gopls-mcp-proxy",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11
+        },
+        {
+          "name": "Install pinned gopls",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 12
+        },
+        {
+          "name": "Real gopls interoperability and proxy-owned content refresh",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 13
+        },
+        {
+          "name": "Upload test evidence",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 14
+        },
+        {
+          "name": "Export workflow telemetry",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 15
+        },
+        {
+          "name": "Upload workflow telemetry",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 16
+        },
+        {
+          "name": "Post Run actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 30
+        },
+        {
+          "name": "Post Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 31
+        },
+        {
+          "name": "Post Collect workflow telemetry",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 32
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 33
+        }
+      ]
+    },
+    {
+      "id": 119722598866,
+      "name": "Test (ubuntu-latest, Go 1.27.2, gopls v0.24.0)",
+      "status": "completed",
+      "conclusion": "success",
+      "run_id": 39748428008,
+      "logs_url": null,
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1
+        },
+        {
+          "name": "Collect workflow telemetry",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2
+        },
+        {
+          "name": "Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3
+        },
+        {
+          "name": "Run actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4
+        },
+        {
+          "name": "Test telemetry exporter",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 5
+        },
+        {
+          "name": "Format",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6
+        },
+        {
+          "name": "Vet",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7
+        },
+        {
+          "name": "Record tested source and runner identity",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 8
+        },
+        {
+          "name": "Unit and protocol components (race)",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9
+        },
+        {
+          "name": "Raw backend independent refresh and protocol contract (required)",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10
+        },
+        {
+          "name": "Run go build ./cmd/gopls-mcp-proxy",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11
+        },
+        {
+          "name": "Install pinned gopls",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12
+        },
+        {
+          "name": "Real gopls interoperability and proxy-owned content refresh",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13
+        },
+        {
+          "name": "Upload test evidence",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 14
+        },
+        {
+          "name": "Export workflow telemetry",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 15
+        },
+        {
+          "name": "Upload workflow telemetry",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 16
+        },
+        {
+          "name": "Post Run actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 30
+        },
+        {
+          "name": "Post Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 31
+        },
+        {
+          "name": "Post Collect workflow telemetry",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 32
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 33
+        }
+      ]
+    },
+    {
+      "id": 119722599077,
+      "name": "Test (macos-latest, Go 1.27.2, gopls v0.24.0)",
+      "status": "completed",
+      "conclusion": "success",
+      "run_id": 39748428008,
+      "logs_url": null,
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1
+        },
+        {
+          "name": "Collect workflow telemetry",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2
+        },
+        {
+          "name": "Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3
+        },
+        {
+          "name": "Run actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4
+        },
+        {
+          "name": "Test telemetry exporter",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 5
+        },
+        {
+          "name": "Format",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6
+        },
+        {
+          "name": "Vet",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7
+        },
+        {
+          "name": "Record tested source and runner identity",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 8
+        },
+        {
+          "name": "Unit and protocol components (race)",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9
+        },
+        {
+          "name": "Raw backend independent refresh and protocol contract (required)",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10
+        },
+        {
+          "name": "Run go build ./cmd/gopls-mcp-proxy",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11
+        },
+        {
+          "name": "Install pinned gopls",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12
+        },
+        {
+          "name": "Real gopls interoperability and proxy-owned content refresh",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13
+        },
+        {
+          "name": "Upload test evidence",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 14
+        },
+        {
+          "name": "Export workflow telemetry",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 15
+        },
+        {
+          "name": "Upload workflow telemetry",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 16
+        },
+        {
+          "name": "Post Run actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 30
+        },
+        {
+          "name": "Post Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 31
+        },
+        {
+          "name": "Post Collect workflow telemetry",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 32
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 33
+        }
+      ]
+    },
+    {
+      "id": 119722599101,
+      "name": "Test (ubuntu-latest, Go 1.27.2, gopls v0.23.0)",
+      "status": "completed",
+      "conclusion": "success",
+      "run_id": 39748428008,
+      "logs_url": null,
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1
+        },
+        {
+          "name": "Collect workflow telemetry",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2
+        },
+        {
+          "name": "Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3
+        },
+        {
+          "name": "Run actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4
+        },
+        {
+          "name": "Test telemetry exporter",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 5
+        },
+        {
+          "name": "Format",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6
+        },
+        {
+          "name": "Vet",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7
+        },
+        {
+          "name": "Record tested source and runner identity",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 8
+        },
+        {
+          "name": "Unit and protocol components (race)",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9
+        },
+        {
+          "name": "Raw backend independent refresh and protocol contract (required)",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10
+        },
+        {
+          "name": "Run go build ./cmd/gopls-mcp-proxy",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11
+        },
+        {
+          "name": "Install pinned gopls",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12
+        },
+        {
+          "name": "Real gopls interoperability and proxy-owned content refresh",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13
+        },
+        {
+          "name": "Upload test evidence",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 14
+        },
+        {
+          "name": "Export workflow telemetry",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 15
+        },
+        {
+          "name": "Upload workflow telemetry",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 16
+        },
+        {
+          "name": "Post Run actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 30
+        },
+        {
+          "name": "Post Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 31
+        },
+        {
+          "name": "Post Collect workflow telemetry",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 32
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 33
+        }
+      ]
+    },
+    {
+      "id": 119722599139,
+      "name": "Test (macos-latest, Go 1.27.2, gopls v0.23.0)",
+      "status": "completed",
+      "conclusion": "success",
+      "run_id": 39748428008,
+      "logs_url": null,
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1
+        },
+        {
+          "name": "Collect workflow telemetry",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2
+        },
+        {
+          "name": "Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3
+        },
+        {
+          "name": "Run actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4
+        },
+        {
+          "name": "Test telemetry exporter",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 5
+        },
+        {
+          "name": "Format",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6
+        },
+        {
+          "name": "Vet",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7
+        },
+        {
+          "name": "Record tested source and runner identity",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 8
+        },
+        {
+          "name": "Unit and protocol components (race)",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9
+        },
+        {
+          "name": "Raw backend independent refresh and protocol contract (required)",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10
+        },
+        {
+          "name": "Run go build ./cmd/gopls-mcp-proxy",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11
+        },
+        {
+          "name": "Install pinned gopls",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12
+        },
+        {
+          "name": "Real gopls interoperability and proxy-owned content refresh",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13
+        },
+        {
+          "name": "Upload test evidence",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 14
+        },
+        {
+          "name": "Export workflow telemetry",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 15
+        },
+        {
+          "name": "Upload workflow telemetry",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 16
+        },
+        {
+          "name": "Post Run actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 30
+        },
+        {
+          "name": "Post Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 31
+        },
+        {
+          "name": "Post Collect workflow telemetry",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 32
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 33
+        }
+      ]
+    },
+    {
+      "id": 119722599147,
+      "name": "Release packages / build",
+      "status": "completed",
+      "conclusion": "success",
+      "run_id": 39748428008,
+      "logs_url": null,
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1
+        },
+        {
+          "name": "Collect workflow telemetry",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2
+        },
+        {
+          "name": "Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3
+        },
+        {
+          "name": "Run actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4
+        },
+        {
+          "name": "Build, package and check all supported targets",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5
+        },
+        {
+          "name": "Upload release packages",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6
+        },
+        {
+          "name": "Export workflow telemetry",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7
+        },
+        {
+          "name": "Upload workflow telemetry",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 8
+        },
+        {
+          "name": "Post Run actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 14
+        },
+        {
+          "name": "Post Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 15
+        },
+        {
+          "name": "Post Collect workflow telemetry",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 16
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 17
+        }
+      ]
+    }
+  ],
+  "artifacts": {
+    "artifacts": [
+      {
+        "id": 12413167020,
+        "name": "test-results-macos-latest-go-1.27.2-gopls-v0.23.0",
+        "size_in_bytes": 12250386,
+        "url": "https://api.github.com/repos/fredgnr/gopls-mcp-proxy/actions/artifacts/12413167020",
+        "archive_download_url": "https://api.github.com/repos/fredgnr/gopls-mcp-proxy/actions/artifacts/12413167020/zip",
+        "expired": false,
+        "created_at": "2026-10-22T08:41:06Z",
+        "expires_at": "2026-11-05T08:41:03Z",
+        "updated_at": "2026-10-22T08:41:06Z",
+        "digest": "sha256:b5b92c5d65e01aedc5df11241bc9cb2ed30e1f3432a0c909f9d1ea37afa2938b",
+        "workflow_run": {
+          "id": 39748428008,
+          "repository_id": 1425315216,
+          "head_repository_id": 1425315216,
+          "head_branch": "feat/on-demand-backend-lifecycle",
+          "head_sha": "4a3a95f98230f4ced6a13e973f1d89b6715220b2"
+        }
+      },
+      {
+        "id": 12412895578,
+        "name": "telemetry-39748428008-1-build-yvb4unkp",
+        "size_in_bytes": 1559,
+        "url": "https://api.github.com/repos/fredgnr/gopls-mcp-proxy/actions/artifacts/12412895578",
+        "archive_download_url": "https://api.github.com/repos/fredgnr/gopls-mcp-proxy/actions/artifacts/12412895578/zip",
+        "expired": false,
+        "created_at": "2026-10-22T08:32:22Z",
+        "expires_at": "2026-10-29T08:32:21Z",
+        "updated_at": "2026-10-22T08:32:22Z",
+        "digest": "sha256:3fe1dd2e5a502f41943085aff97f21e65514bb167de736ecba3431eed4588420",
+        "workflow_run": {
+          "id": 39748428008,
+          "repository_id": 1425315216,
+          "head_repository_id": 1425315216,
+          "head_branch": "feat/on-demand-backend-lifecycle",
+          "head_sha": "4a3a95f98230f4ced6a13e973f1d89b6715220b2"
+        }
+      },
+      {
+        "id": 12412885501,
+        "name": "release-dist",
+        "size_in_bytes": 6826728,
+        "url": "https://api.github.com/repos/fredgnr/gopls-mcp-proxy/actions/artifacts/12412885501",
+        "archive_download_url": "https://api.github.com/repos/fredgnr/gopls-mcp-proxy/actions/artifacts/12412885501/zip",
+        "expired": false,
+        "created_at": "2026-10-22T08:32:21Z",
+        "expires_at": "2026-11-05T08:32:19Z",
+        "updated_at": "2026-10-22T08:32:21Z",
+        "digest": "sha256:af2f8cf161be3f14ffc2ea1c18c44d763b8a903939c67ea6c53fb16763bc0bf1",
+        "workflow_run": {
+          "id": 39748428008,
+          "repository_id": 1425315216,
+          "head_repository_id": 1425315216,
+          "head_branch": "feat/on-demand-backend-lifecycle",
+          "head_sha": "4a3a95f98230f4ced6a13e973f1d89b6715220b2"
+        }
+      },
+      {
+        "id": 12412786914,
+        "name": "test-results-ubuntu-latest-go-1.27.2-gopls-v0.24.0",
+        "size_in_bytes": 13319461,
+        "url": "https://api.github.com/repos/fredgnr/gopls-mcp-proxy/actions/artifacts/12412786914",
+        "archive_download_url": "https://api.github.com/repos/fredgnr/gopls-mcp-proxy/actions/artifacts/12412786914/zip",
+        "expired": false,
+        "created_at": "2026-10-22T08:35:58Z",
+        "expires_at": "2026-11-05T08:35:56Z",
+        "updated_at": "2026-10-22T08:35:58Z",
+        "digest": "sha256:88850d67dc513693a3be97112aa853ee2683e247698d7ea3c6e4d03d156b00c9",
+        "workflow_run": {
+          "id": 39748428008,
+          "repository_id": 1425315216,
+          "head_repository_id": 1425315216,
+          "head_branch": "feat/on-demand-backend-lifecycle",
+          "head_sha": "4a3a95f98230f4ced6a13e973f1d89b6715220b2"
+        }
+      },
+      {
+        "id": 12412621856,
+        "name": "telemetry-39748428008-1-test-hrrj0d4v",
+        "size_in_bytes": 3227,
+        "url": "https://api.github.com/repos/fredgnr/gopls-mcp-proxy/actions/artifacts/12412621856",
+        "archive_download_url": "https://api.github.com/repos/fredgnr/gopls-mcp-proxy/actions/artifacts/12412621856/zip",
+        "expired": false,
+        "created_at": "2026-10-22T08:34:23Z",
+        "expires_at": "2026-10-29T08:34:22Z",
+        "updated_at": "2026-10-22T08:34:23Z",
+        "digest": "sha256:53a0fe4bdffac3f7c063380b684f48d822c251010b5f7a78ba15a5e80e6bbf31",
+        "workflow_run": {
+          "id": 39748428008,
+          "repository_id": 1425315216,
+          "head_repository_id": 1425315216,
+          "head_branch": "feat/on-demand-backend-lifecycle",
+          "head_sha": "4a3a95f98230f4ced6a13e973f1d89b6715220b2"
+        }
+      },
+      {
+        "id": 12412468614,
+        "name": "telemetry-39748428008-1-test-16p5jo0c",
+        "size_in_bytes": 5155,
+        "url": "https://api.github.com/repos/fredgnr/gopls-mcp-proxy/actions/artifacts/12412468614",
+        "archive_download_url": "https://api.github.com/repos/fredgnr/gopls-mcp-proxy/actions/artifacts/12412468614/zip",
+        "expired": false,
+        "created_at": "2026-10-22T08:41:22Z",
+        "expires_at": "2026-10-29T08:41:21Z",
+        "updated_at": "2026-10-22T08:41:22Z",
+        "digest": "sha256:4e4d3fb123cb7a8994040253f5e2b564ba6075b132da99be7b8522a716a28eb2",
+        "workflow_run": {
+          "id": 39748428008,
+          "repository_id": 1425315216,
+          "head_repository_id": 1425315216,
+          "head_branch": "feat/on-demand-backend-lifecycle",
+          "head_sha": "4a3a95f98230f4ced6a13e973f1d89b6715220b2"
+        }
+      },
+      {
+        "id": 12412392471,
+        "name": "test-results-ubuntu-latest-go-1.25.x-gopls-none",
+        "size_in_bytes": 11054813,
+        "url": "https://api.github.com/repos/fredgnr/gopls-mcp-proxy/actions/artifacts/12412392471",
+        "archive_download_url": "https://api.github.com/repos/fredgnr/gopls-mcp-proxy/actions/artifacts/12412392471/zip",
+        "expired": false,
+        "created_at": "2026-10-22T08:34:22Z",
+        "expires_at": "2026-11-05T08:34:19Z",
+        "updated_at": "2026-10-22T08:34:22Z",
+        "digest": "sha256:6f92f6a44ab53a4c88c138a5af9bf88fd225c7350763c31d6106fd8f997a4a00",
+        "workflow_run": {
+          "id": 39748428008,
+          "repository_id": 1425315216,
+          "head_repository_id": 1425315216,
+          "head_branch": "feat/on-demand-backend-lifecycle",
+          "head_sha": "4a3a95f98230f4ced6a13e973f1d89b6715220b2"
+        }
+      },
+      {
+        "id": 12412377869,
+        "name": "telemetry-39748428008-1-test-y0vxtd81",
+        "size_in_bytes": 4815,
+        "url": "https://api.github.com/repos/fredgnr/gopls-mcp-proxy/actions/artifacts/12412377869",
+        "archive_download_url": "https://api.github.com/repos/fredgnr/gopls-mcp-proxy/actions/artifacts/12412377869/zip",
+        "expired": false,
+        "created_at": "2026-10-22T08:35:59Z",
+        "expires_at": "2026-10-29T08:35:59Z",
+        "updated_at": "2026-10-22T08:35:59Z",
+        "digest": "sha256:008dbb0d3454ad8a824d8ce5c06533a35f6a16d044cb7ccdc70a3aaea9bd8a68",
+        "workflow_run": {
+          "id": 39748428008,
+          "repository_id": 1425315216,
+          "head_repository_id": 1425315216,
+          "head_branch": "feat/on-demand-backend-lifecycle",
+          "head_sha": "4a3a95f98230f4ced6a13e973f1d89b6715220b2"
+        }
+      },
+      {
+        "id": 12412298857,
+        "name": "test-results-macos-latest-go-1.27.2-gopls-v0.24.0",
+        "size_in_bytes": 12251592,
+        "url": "https://api.github.com/repos/fredgnr/gopls-mcp-proxy/actions/artifacts/12412298857",
+        "archive_download_url": "https://api.github.com/repos/fredgnr/gopls-mcp-proxy/actions/artifacts/12412298857/zip",
+        "expired": false,
+        "created_at": "2026-10-22T08:41:20Z",
+        "expires_at": "2026-11-05T08:41:18Z",
+        "updated_at": "2026-10-22T08:41:20Z",
+        "digest": "sha256:db9729bf89617e773c7adb0e9a823ca1c13332a5f6928b0029dade43c03bd796",
+        "workflow_run": {
+          "id": 39748428008,
+          "repository_id": 1425315216,
+          "head_repository_id": 1425315216,
+          "head_branch": "feat/on-demand-backend-lifecycle",
+          "head_sha": "4a3a95f98230f4ced6a13e973f1d89b6715220b2"
+        }
+      },
+      {
+        "id": 12412193632,
+        "name": "telemetry-39748428008-1-test-oeef0b9j",
+        "size_in_bytes": 4925,
+        "url": "https://api.github.com/repos/fredgnr/gopls-mcp-proxy/actions/artifacts/12412193632",
+        "archive_download_url": "https://api.github.com/repos/fredgnr/gopls-mcp-proxy/actions/artifacts/12412193632/zip",
+        "expired": false,
+        "created_at": "2026-10-22T08:36:06Z",
+        "expires_at": "2026-10-29T08:36:06Z",
+        "updated_at": "2026-10-22T08:36:06Z",
+        "digest": "sha256:75cd19bb5c537fb86c2697f0d181e9d632b63bd0b028dd65bb9f2d07bd6a9a09",
+        "workflow_run": {
+          "id": 39748428008,
+          "repository_id": 1425315216,
+          "head_repository_id": 1425315216,
+          "head_branch": "feat/on-demand-backend-lifecycle",
+          "head_sha": "4a3a95f98230f4ced6a13e973f1d89b6715220b2"
+        }
+      },
+      {
+        "id": 12412179765,
+        "name": "telemetry-39748428008-1-test-xqq9jo3_",
+        "size_in_bytes": 4911,
+        "url": "https://api.github.com/repos/fredgnr/gopls-mcp-proxy/actions/artifacts/12412179765",
+        "archive_download_url": "https://api.github.com/repos/fredgnr/gopls-mcp-proxy/actions/artifacts/12412179765/zip",
+        "expired": false,
+        "created_at": "2026-10-22T08:41:07Z",
+        "expires_at": "2026-10-29T08:41:06Z",
+        "updated_at": "2026-10-22T08:41:07Z",
+        "digest": "sha256:2bf7c71d5249fbeb67164fe4d06a2f30114e80c32bc81b142c01e31268660891",
+        "workflow_run": {
+          "id": 39748428008,
+          "repository_id": 1425315216,
+          "head_repository_id": 1425315216,
+          "head_branch": "feat/on-demand-backend-lifecycle",
+          "head_sha": "4a3a95f98230f4ced6a13e973f1d89b6715220b2"
+        }
+      },
+      {
+        "id": 12412163621,
+        "name": "test-results-ubuntu-latest-go-1.27.2-gopls-v0.23.0",
+        "size_in_bytes": 13318542,
+        "url": "https://api.github.com/repos/fredgnr/gopls-mcp-proxy/actions/artifacts/12412163621",
+        "archive_download_url": "https://api.github.com/repos/fredgnr/gopls-mcp-proxy/actions/artifacts/12412163621/zip",
+        "expired": false,
+        "created_at": "2026-10-22T08:36:05Z",
+        "expires_at": "2026-11-05T08:36:03Z",
+        "updated_at": "2026-10-22T08:36:05Z",
+        "digest": "sha256:b1eed14678bf7d9c91ae4a4bc961c94f2b7e7c3f1b0a5fcc2b6462fa23608ee4",
+        "workflow_run": {
+          "id": 39748428008,
+          "repository_id": 1425315216,
+          "head_repository_id": 1425315216,
+          "head_branch": "feat/on-demand-backend-lifecycle",
+          "head_sha": "4a3a95f98230f4ced6a13e973f1d89b6715220b2"
+        }
+      }
+    ]
+  }
+}
