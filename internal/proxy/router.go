@@ -65,6 +65,15 @@ func (r *relay) fromFront(raw []byte) {
 			continue
 		}
 		if m.Kind == wire.Notification && isControlNotification(m) && r.proc != nil && (r.phase == "ready" || r.phase == "draining") {
+			// Once a tool result is committed to the frontend, unrelated control
+			// demand also belongs to the next boot. Initialized is still allowed
+			// through while a legacy handshake prevents retirement.
+			if r.retirementPending() {
+				q.msgs = append(q.msgs, m)
+				continue
+			}
+			r.noteActivity()
+			r.bootDemandServed = true
 			r.recovery.ObserveRequest(m)
 			r.sendBack(m.Raw)
 			continue
@@ -146,6 +155,7 @@ func (r *relay) fromFront(raw []byte) {
 		return
 	}
 	r.poll = true
+	r.noteActivity()
 	r.queue = append(r.queue, q)
 	r.queueCount += len(q.records)
 	r.queueBytes += q.bytes
@@ -159,6 +169,7 @@ func (r *relay) frontResponse(m wire.Message) {
 	if r.proc == nil || rev.boot != r.proc.ID {
 		return
 	}
+	r.noteActivity()
 	b, err := wire.Replace(m.Raw, rev.original.Raw, "id")
 	if err != nil {
 		r.fatal = err
@@ -262,6 +273,9 @@ func (r *relay) canDispatch(q *queued) bool {
 	if r.phase != "ready" || r.proc == nil {
 		return false
 	}
+	if r.retirementPending() {
+		return false
+	}
 	if r.cfg.RefreshMode == RefreshPerCall {
 		if q.isToolCall() && (q.freshBoot != r.proc.ID || !r.callBoundaryIdle()) {
 			return false
@@ -293,6 +307,8 @@ func (r *relay) canDispatch(q *queued) bool {
 	return true
 }
 func (r *relay) dispatch() {
+	r.noteActivity()
+	r.bootDemandServed = true
 	q := r.queue[0]
 	r.queue = r.queue[1:]
 	r.queueCount -= len(q.records)
@@ -340,7 +356,7 @@ func joinFrame(raws [][]byte, batch bool) []byte {
 	return append(append([]byte{'['}, bytes.Join(raws, []byte{','})...), ']')
 }
 func (r *relay) fromBack(raw []byte) {
-	if r.phase == "closing" {
+	if r.phase == "closing" || r.phase == "stopping" || r.proc == nil {
 		return
 	}
 	f, err := wire.ParseFrame(raw)
@@ -363,6 +379,7 @@ func (r *relay) fromBack(raw []byte) {
 		}
 	}
 	for _, m := range f.Messages {
+		r.recovery.ObserveBackend(m)
 		if m.Kind == wire.Response {
 			if c, ok := r.controls[m.ID.Key]; ok {
 				delete(r.controls, m.ID.Key)
@@ -394,6 +411,7 @@ func (r *relay) fromBack(raw []byte) {
 			continue
 		}
 		if m.Kind == wire.Request {
+			r.noteActivity()
 			p, _ := protocol.Lookup(r.recovery.Revision())
 			if p.Modern {
 				r.fatal = errors.New("modern backend sent forbidden reverse request")
@@ -589,6 +607,7 @@ func (r *relay) deliverBatch(g *batchGroup, fresh bool) {
 	}
 	g.done = true
 	var initializationErr error
+	var toolBoot uint64
 	for i, rec := range g.records {
 		r.resultBytes -= len(g.responses[i])
 		if g.upstream[i] {
@@ -602,6 +621,10 @@ func (r *relay) deliverBatch(g *batchGroup, fresh bool) {
 				m, err := wire.ParseMessage(g.responses[i])
 				if err == nil {
 					r.recovery.ObserveResponse(rec.msg, m)
+					if r.onDemand() && rec.msg.Method == "tools/call" {
+						toolBoot = rec.boot
+						r.retiringCall = rec.boot
+					}
 					if rec.msg.Method == "initialize" {
 						r.logInitializationRecovery()
 						if _, success := wire.Get(m.Raw, "result"); success && r.cfg.RefreshMode == RefreshPerCall {
@@ -629,7 +652,7 @@ func (r *relay) deliverBatch(g *batchGroup, fresh bool) {
 		r.resultBytes = 0
 	}
 	if len(g.responses) > 0 {
-		r.sendFront(joinFrame(g.responses, g.batch))
+		r.sendFrontResult(joinFrame(g.responses, g.batch), toolBoot)
 	}
 	g.responses = nil
 	g.records = nil

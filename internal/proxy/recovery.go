@@ -34,6 +34,9 @@ type Recovery struct {
 	directories    map[string]*directoryView
 	blocked        string
 	sequence       uint64
+	// Voluntary suspension has a stricter contract than forced refresh. These
+	// bounded flags never change Preflight or the existing recovery whitelist.
+	suspendState suspendState
 }
 
 type directoryView struct {
@@ -58,6 +61,16 @@ func (r *Recovery) Revision() string { return r.revision }
 
 func (r *Recovery) NeedsRecovery() bool {
 	return r.revision != "" || len(r.initRequest) != 0
+}
+
+// IsPristine distinguishes an unused physical backend from a logical session.
+// In particular, unknown or uncertain state still requires the normal recovery
+// checks even if no request established a protocol revision or initialization.
+func (r *Recovery) IsPristine() bool {
+	return r.revision == "" && len(r.initRequest) == 0 && len(r.initResult) == 0 &&
+		r.initDiagnostic == (RecoveryDiagnostic{}) && len(r.initialized) == 0 &&
+		len(r.logLevel) == 0 && len(r.subscribed) == 0 && len(r.directories) == 0 &&
+		r.blocked == "" && r.suspendState == 0
 }
 
 func (r *Recovery) Clone() *Recovery {
@@ -91,6 +104,7 @@ func (r *Recovery) Clone() *Recovery {
 // that change state are recorded only when their successful response was
 // delivered, so a failed, cancelled or undelivered update cannot be resurrected.
 func (r *Recovery) ObserveRequest(m wire.Message) {
+	r.observeSuspendRequest(m)
 	if m.Method != "initialize" {
 		if revision := protocol.Version(m); revision != "" {
 			r.SetRevision(revision)
@@ -126,6 +140,7 @@ func (r *Recovery) MarkUncertain(request wire.Message) {
 // an obsolete backend response suppressed by the freshness gate is not evidence
 // of client-observed state.
 func (r *Recovery) ObserveResponse(request, response wire.Message) {
+	r.observeSuspendResponse(request, response)
 	if r.blocked != "" {
 		return
 	}
@@ -558,7 +573,9 @@ func recoveryCursor(raw []byte, cursor string) ([]byte, error) {
 	return json.Marshal(envelope)
 }
 
-func (r *Recovery) boundState() {
+// StateBytes is the retained protocol snapshot payload, excluding Go allocation
+// and map overhead. It is a ledger-size metric, not process RSS or heap usage.
+func (r *Recovery) StateBytes() int {
 	bytesUsed := len(r.initRequest) + len(r.initResult) + len(r.initialized) + len(r.logLevel)
 	for _, request := range r.subscribed {
 		bytesUsed += len(request)
@@ -569,6 +586,11 @@ func (r *Recovery) boundState() {
 			bytesUsed += len(page)
 		}
 	}
+	return bytesUsed
+}
+
+func (r *Recovery) boundState() {
+	bytesUsed := r.StateBytes()
 	if bytesUsed > maxRecoveryBytes || len(r.subscribed) > maxRecoverySubscriptions {
 		r.blocked = "confirmed protocol state exceeds recovery memory budget"
 		r.subscribed = nil

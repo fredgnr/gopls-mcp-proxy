@@ -7,4 +7,4 @@ require (
 	golang.org/x/mod v0.34.0
 )
 
-require golang.org/x/sys v0.41.0 // indirect
+require golang.org/x/sys v0.41.0

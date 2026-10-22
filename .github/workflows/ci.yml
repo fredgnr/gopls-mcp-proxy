@@ -104,6 +104,7 @@ jobs:
           mkdir -p test-results
           go test -race -json ./cmd/... ./internal/... -count=1 | tee test-results/unit.json
           python3 scripts/check-launcher-tests.py unit test-results/unit.json > test-results/launcher-unit.json
+          python3 scripts/check-lifecycle-tests.py unit test-results/unit.json > test-results/lifecycle-unit.json
       - name: Raw backend independent refresh and protocol contract (required)
         env:
           PROXY_TEST_EVIDENCE_DIR: ${{ runner.temp }}/proxy-evidence
@@ -111,6 +112,7 @@ jobs:
         run: |
           go test -race -json ./integration -run '^TestRaw' -count=1 | tee test-results/raw-contract.json
           python3 scripts/check-launcher-tests.py raw test-results/raw-contract.json > test-results/launcher-raw.json
+          python3 scripts/check-lifecycle-tests.py raw test-results/raw-contract.json > test-results/lifecycle-raw.json
       - run: go build ./cmd/gopls-mcp-proxy
       - name: Install pinned gopls
         if: matrix.integration
@@ -125,6 +127,7 @@ jobs:
         run: |
           go test -json ./integration -run '^TestRealGopls' -count=1 | tee test-results/real-gopls.json
           python3 scripts/check-launcher-tests.py real test-results/real-gopls.json > test-results/launcher-real.json
+          python3 scripts/check-lifecycle-tests.py real test-results/real-gopls.json "$PROXY_TEST_EVIDENCE_DIR" > test-results/lifecycle-real.json
       - name: Upload test evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7

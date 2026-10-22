@@ -91,13 +91,15 @@ func parseOptions(args []string, stderr io.Writer) (options, error) {
 	flags.Var(&o.include, "include", "include root-relative glob (repeatable; supports **)")
 	flags.Var(&o.exclude, "exclude", "exclude root-relative glob (repeatable; exclusion wins)")
 	flags.StringVar(&o.cfg.RefreshMode, "refresh-mode", o.cfg.RefreshMode, "backend refresh policy: on-change or per-call (fresh backend for each tools/call)")
+	flags.StringVar(&o.cfg.BackendLifecycle, "backend-lifecycle", o.cfg.BackendLifecycle, "backend residency: resident or on-demand (requires per-call)")
+	flags.DurationVar(&o.cfg.BackendIdleTimeout, "backend-idle-timeout", o.cfg.BackendIdleTimeout, "on-demand idle grace after initialization or ordinary requests; completed tools release immediately when safe")
 	flags.BoolVar(&o.goDiscovery, "go-discovery", false, "optionally discover additional Go workspace input roots")
 	flags.DurationVar(&o.cfg.Debounce, "debounce", o.cfg.Debounce, "quiet window before refreshing changed inputs")
 	flags.DurationVar(&o.cfg.MaxDebounce, "max-debounce", o.cfg.MaxDebounce, "maximum event merging window")
 	flags.DurationVar(&o.cfg.PollInterval, "poll-interval", o.cfg.PollInterval, "full content fingerprint polling interval")
 	flags.DurationVar(&o.cfg.DrainTimeout, "drain-timeout", o.cfg.DrainTimeout, "maximum wait for active finite requests")
 	flags.DurationVar(&o.cfg.StartupTimeout, "startup-timeout", o.cfg.StartupTimeout, "backend startup and protocol recovery deadline")
-	flags.DurationVar(&o.cfg.RefreshTimeout, "refresh-timeout", o.cfg.RefreshTimeout, "total recovery budget from first confirmed invalidation")
+	flags.DurationVar(&o.cfg.RefreshTimeout, "refresh-timeout", o.cfg.RefreshTimeout, "total recovery budget per invalidation or on-demand wake")
 	flags.DurationVar(&o.cfg.CleanupTimeout, "cleanup-timeout", o.cfg.CleanupTimeout, "final process cleanup budget")
 	flags.DurationVar(&o.cfg.RequestTimeout, "request-timeout", o.cfg.RequestTimeout, "total finite request admission and execution budget")
 	flags.DurationVar(&o.cfg.RetryMin, "retry-min", o.cfg.RetryMin, "initial restart backoff")
@@ -198,7 +200,7 @@ func runConfigured(ctx context.Context, o options) error {
 	if err != nil {
 		return err
 	}
-	logger.Info("proxy starting", "version", buildinfo.Version, "commit", buildinfo.Commit, "mode", o.mode, "refresh_mode", o.cfg.RefreshMode, "selection_source", selectionSource, "backend", factory.Locator(), "cwd", cwd)
+	logger.Info("proxy starting", "version", buildinfo.Version, "commit", buildinfo.Commit, "mode", o.mode, "refresh_mode", o.cfg.RefreshMode, "backend_lifecycle", o.cfg.BackendLifecycle, "backend_idle_timeout", o.cfg.BackendIdleTimeout, "selection_source", selectionSource, "backend", factory.Locator(), "cwd", cwd)
 	return proxy.Run(ctx, o.cfg, tracker, factory, os.Stdin, os.Stdout)
 }
 
