@@ -83,6 +83,32 @@ enabled = true
 
 默认模式是 `--refresh-mode=on-change`，仍按输入变化刷新。该选项需要包含此功能的新构建；已发布的 `v0.2.0` 不包含它。
 
+### 调用结束后释放 gopls
+
+`per-call` 决定每次工具调用是否使用新进程；`backend-lifecycle` 决定用完后是否保留进程。默认 `resident` 保留最近的后端，直到下一次刷新、故障或连接关闭。对有限 gopls 工具调用，可显式选择 `on-demand`：
+
+```toml
+[mcp_servers.gopls]
+default_tools_approval_mode = "approve"
+command = "/Users/you/go/bin/gopls-mcp-proxy"
+args = [
+  "--refresh-mode", "per-call",
+  "--backend-lifecycle", "on-demand",
+  "--backend-idle-timeout", "10s",
+]
+enabled = true
+```
+
+这些 `backend-*` 选项需要包含本功能的新构建，v0.6.0 不支持。`on-demand` 首版仅与 `per-call` 配合，其他组合会在启动后端前报配置错误。
+
+有限工具调用的最终响应完整写入前端管道、相关交互排空且协议状态允许释放后，代理立即开始清理主后端，不等待 10 秒。前端 MCP 连接继续存在，下次需要后端处理的请求或通知会按需唤醒并恢复协议。初始化、`tools/list`、`ping` 等普通交互结束后，使用大于零的可配置空闲期限，默认 10 秒。`ping` 仍转发给真实后端；例如每 5 秒一次的心跳可能使普通请求的后端一直驻留。
+
+未完成握手、分页、显式订阅、任务、多回合交互以及未知或不确定的协议状态会暂缓自愿释放。它们不取消下一次工具调用原有的强制刷新，也不提供新的跨进程业务句柄恢复保证。通用 MCP 后端依赖不透明进程内状态时，应保留 `resident`。
+
+休眠时，文件变化只留待下次唤醒重新检查，不启动 gopls。无显式订阅时仅声明目录变更通知能力不会永久阻止休眠，因此休眠期间不保证实时目录推送；唤醒时按既有恢复规则校验目录并发送允许的失效通知。已按旧目录构造的请求不会被自动改写或重放。需要持续在线通知时使用 `resident`。
+
+工具之后紧接普通请求可能增加一次冷启动；连续独立工具调用仍各自使用新后端。主 gopls 清理确认后才启动下一主后端，独立 session 的 telemetry 退出由测试观察器另外验证。此功能不会清理其他宿主直连的 gopls，也不修改用户 telemetry 配置或设置固定 `GOMEMLIMIT`。回退时改为 `--backend-lifecycle=resident` 并让宿主重新建立 MCP 连接即可保留原有 per-call 行为。实现边界及验收记录见[生命周期说明](docs/changes/on-demand-lifecycle.md)。
+
 ### 从旧命令迁移
 
 旧的 `--gopls`、`--workspace`、`--replace-dir` 已移除；使用它们会返回迁移提示。
@@ -169,6 +195,8 @@ gopls-mcp-proxy \
 | 参数 | 默认值 | 含义 |
 |---|---|---|
 | `--refresh-mode` | `on-change` | `on-change` 按输入变化刷新；`per-call` 为每个独立 `tools/call` 启动新后端 |
+| `--backend-lifecycle` | `resident` | `resident` 保留后端；`on-demand` 安全完成后释放，首版要求 `per-call` |
+| `--backend-idle-timeout` | `10s` | on-demand 普通交互后的空闲期限，必须大于零；工具完成释放不等待此期限 |
 | `--watch-root` | 无 | 额外输入文件或目录，可重复；cwd 始终纳入 |
 | `--include` / `--exclude` | 无 | 输入 glob，可重复 |
 | `--go-discovery` | `false` | 可选 Go 工作区发现 |
@@ -178,7 +206,7 @@ gopls-mcp-proxy \
 | `--drain-timeout` | `5s` | 等待已派发有限请求结束的上限 |
 | `--startup-timeout` | `45s` | 单次启动及协议恢复上限 |
 | `--shutdown-timeout` | `2s` | 关闭 stdin 后、TERM 后各自等待上限 |
-| `--refresh-timeout` | `60s` | 从首个确认失效开始的一轮恢复预算 |
+| `--refresh-timeout` | `60s` | 一轮恢复预算；on-demand 新需求唤醒时重新计时，休眠不消耗预算 |
 | `--cleanup-timeout` | `6s` | 最后资源清理预算 |
 | `--request-timeout` | `110s` | 有限请求排队、扫描、重建、执行的总期限 |
 | `--queue-limit` | `64` | 待派发请求数，batch 按请求成员计数 |

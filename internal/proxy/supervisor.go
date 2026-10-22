@@ -24,6 +24,8 @@ type Tracker interface {
 const (
 	RefreshOnChange = "on-change"
 	RefreshPerCall  = "per-call"
+	BackendResident = "resident"
+	BackendOnDemand = "on-demand"
 )
 
 type Config struct {
@@ -32,15 +34,26 @@ type Config struct {
 	QueueLimit, QueueBytes, MaxFrameBytes, MaxConcurrent                              int
 	DisableWatcher                                                                    bool
 	RefreshMode                                                                       string
+	BackendLifecycle                                                                  string
+	BackendIdleTimeout                                                                time.Duration
 	Logger                                                                            *slog.Logger
 }
 
 func DefaultConfig() Config {
-	return Config{Debounce: 500 * time.Millisecond, MaxDebounce: 2 * time.Second, PollInterval: 2 * time.Second, DrainTimeout: 5 * time.Second, StartupTimeout: 45 * time.Second, RequestTimeout: 110 * time.Second, RefreshTimeout: 60 * time.Second, CleanupTimeout: 6 * time.Second, RetryMin: time.Second, RetryMax: 30 * time.Second, QueueLimit: 64, QueueBytes: 64 << 20, MaxFrameBytes: 16 << 20, MaxConcurrent: 8, RefreshMode: RefreshOnChange, Logger: slog.Default()}
+	return Config{Debounce: 500 * time.Millisecond, MaxDebounce: 2 * time.Second, PollInterval: 2 * time.Second, DrainTimeout: 5 * time.Second, StartupTimeout: 45 * time.Second, RequestTimeout: 110 * time.Second, RefreshTimeout: 60 * time.Second, CleanupTimeout: 6 * time.Second, RetryMin: time.Second, RetryMax: 30 * time.Second, QueueLimit: 64, QueueBytes: 64 << 20, MaxFrameBytes: 16 << 20, MaxConcurrent: 8, RefreshMode: RefreshOnChange, BackendLifecycle: BackendResident, BackendIdleTimeout: 10 * time.Second, Logger: slog.Default()}
 }
 func (c Config) Validate() error {
 	if c.RefreshMode != RefreshOnChange && c.RefreshMode != RefreshPerCall {
 		return fmt.Errorf("invalid refresh mode %q: use on-change or per-call", c.RefreshMode)
+	}
+	if c.BackendLifecycle != BackendResident && c.BackendLifecycle != BackendOnDemand {
+		return fmt.Errorf("invalid backend lifecycle %q: use resident or on-demand", c.BackendLifecycle)
+	}
+	if c.BackendLifecycle == BackendOnDemand && c.RefreshMode != RefreshPerCall {
+		return errors.New("on-demand backend lifecycle requires refresh-mode=per-call")
+	}
+	if c.BackendIdleTimeout <= 0 {
+		return errors.New("backend idle timeout must be greater than zero")
 	}
 	if c.Debounce < 0 || c.DrainTimeout < 0 || c.MaxDebounce <= 0 || c.PollInterval <= 0 || c.StartupTimeout <= 0 || c.RequestTimeout <= 0 || c.RefreshTimeout <= 0 || c.CleanupTimeout <= 0 || c.RetryMin <= 0 || c.RetryMax < c.RetryMin || c.QueueLimit < 1 || c.MaxConcurrent < 1 || c.QueueBytes < 1 || c.MaxFrameBytes < 1 {
 		return errors.New("invalid proxy budgets")
@@ -56,6 +69,9 @@ type incoming struct {
 type writeItem struct {
 	raw []byte
 	at  time.Time
+	// A native finite tool result may retire only its own boot after this
+	// exact frame has been successfully written to the frontend.
+	toolBoot uint64
 }
 type writeDone struct {
 	boot uint64
@@ -63,6 +79,7 @@ type writeDone struct {
 	err  error
 }
 type scanDone struct {
+	token    uint64
 	batches  []*batchGroup
 	results  []resultFrame
 	dispatch *queued
@@ -88,6 +105,7 @@ type internalCall struct {
 	raw    []byte
 	reply  chan internalReply
 	notify bool
+	boot   uint64
 }
 type internalReply struct {
 	raw []byte
@@ -144,6 +162,13 @@ type reverseRecord struct {
 }
 
 type relay struct {
+	wakeAt, idleSince, toolWrittenAt, stopAt      time.Time
+	abandonedAt                                   time.Time
+	retiringCall                                  uint64
+	stopReason, suspendDeferred                   string
+	stopToIdle, abandonedStart, bootDemandServed  bool
+	scanSequence                                  uint64
+	scanCancel, startCancel, recoveryCancel       context.CancelFunc
 	reverseBytes                                  int
 	readyBatches                                  []*batchGroup
 	startResult                                   chan startDone
@@ -258,7 +283,7 @@ func Run(parent context.Context, cfg Config, tracker Tracker, factory *backend.F
 						return e.err
 					}
 					r.fromFront(e.raw)
-				} else if r.proc != nil && e.boot == r.proc.ID {
+				} else if r.proc != nil && e.boot == r.proc.ID && r.phase != "stopping" {
 					if e.err != nil {
 						r.invalidate("backend_unavailable")
 						if r.phase == "recovering" {
@@ -329,7 +354,7 @@ func (r *relay) writeBackend(out io.Writer, ch <-chan writeItem, boot uint64, de
 			return
 		case item := <-ch:
 			err := wr.WriteFrame(item.raw)
-			r.emit(writeDone{boot, len(item.raw), err})
+			r.emit(writeDone{boot: boot, size: len(item.raw), err: err})
 			if err != nil {
 				return
 			}
@@ -337,6 +362,9 @@ func (r *relay) writeBackend(out io.Writer, ch <-chan writeItem, boot uint64, de
 	}
 }
 func (r *relay) sendFront(raw []byte) {
+	r.sendFrontResult(raw, 0)
+}
+func (r *relay) sendFrontResult(raw []byte, toolBoot uint64) {
 	if r.fatal != nil {
 		return
 	}
@@ -344,7 +372,7 @@ func (r *relay) sendFront(raw []byte) {
 		r.fatal = errors.New("client output byte budget exceeded")
 		return
 	}
-	item := writeItem{raw, time.Now()}
+	item := writeItem{raw: raw, at: time.Now(), toolBoot: toolBoot}
 	select {
 	case r.front <- item:
 		r.frontPending = append(r.frontPending, item)
@@ -362,7 +390,7 @@ func (r *relay) sendBack(raw []byte) {
 		r.fatal = errors.New("backend output byte budget exceeded")
 		return
 	}
-	item := writeItem{raw, time.Now()}
+	item := writeItem{raw: raw, at: time.Now()}
 	select {
 	case r.back <- item:
 		r.backPending = append(r.backPending, item)
@@ -374,6 +402,10 @@ func (r *relay) sendBack(raw []byte) {
 func (r *relay) written(e writeDone) {
 	if e.boot == 0 {
 		if len(r.frontPending) > 0 {
+			item := r.frontPending[0]
+			if e.err == nil && item.toolBoot != 0 && r.proc != nil && item.toolBoot == r.proc.ID {
+				r.toolWrittenAt = time.Now()
+			}
 			r.frontPending = r.frontPending[1:]
 			r.frontBytes -= e.size
 		}
@@ -394,11 +426,14 @@ func (r *relay) written(e writeDone) {
 	}
 }
 func (r *relay) invalidate(reason string) {
-	if r.proc == nil {
+	if r.proc == nil || r.phase == "stopping" {
 		return
 	}
 	if r.dirtyAt.IsZero() {
 		r.dirtyAt = time.Now()
+		if r.onDemand() && r.wakeAt.IsZero() {
+			r.wakeAt = r.dirtyAt
+		}
 		r.cfg.Logger.Info("backend invalidated", "reason", reason, "generation", r.generation, "boot_id", r.proc.ID)
 	}
 	if r.phase == "ready" {
@@ -412,6 +447,8 @@ func (r *relay) scan(purpose string) {
 		return
 	}
 	r.scanning = true
+	r.scanSequence++
+	token := r.scanSequence
 	var groups []*batchGroup
 	var frames []resultFrame
 	var head *queued
@@ -425,17 +462,21 @@ func (r *relay) scan(purpose string) {
 		head = r.queue[0]
 	}
 	deadline := time.Now().Add(r.cfg.RequestTimeout)
-	if !r.dirtyAt.IsZero() {
-		deadline = r.dirtyAt.Add(r.cfg.RefreshTimeout)
+	if refresh := r.refreshDeadline(); !refresh.IsZero() {
+		deadline = refresh
 	}
 	if (purpose == "initial" || purpose == "publish") && !r.startAt.IsZero() && r.startAt.Add(r.cfg.StartupTimeout).Before(deadline) {
 		deadline = r.startAt.Add(r.cfg.StartupTimeout)
 	}
+	if r.onDemand() && (purpose == "initial" || purpose == "publish") {
+		deadline = r.demandDeadline(deadline)
+	}
+	ctx, c := context.WithDeadline(r.ctx, deadline)
+	r.scanCancel = c
 	go func() {
-		ctx, c := context.WithDeadline(r.ctx, deadline)
 		defer c()
 		snap, err := r.tracker.Scan(ctx)
-		r.emit(scanDone{purpose: purpose, snap: snap, err: err, results: frames, dispatch: head, batches: groups})
+		r.emit(scanDone{token: token, purpose: purpose, snap: snap, err: err, results: frames, dispatch: head, batches: groups})
 	}()
 }
 func (r *relay) advance() {
@@ -446,6 +487,9 @@ func (r *relay) advance() {
 		if len(r.frontPending) == 0 || !time.Now().Before(r.closeAt) {
 			r.fatal = r.closingErr
 		}
+		return
+	}
+	if r.abandonUnneededWake() {
 		return
 	}
 	if r.proc != nil && r.phase == "ready" && r.tracker.Epoch() != r.snapshot.Epoch {
@@ -461,6 +505,7 @@ func (r *relay) advance() {
 		return
 	}
 	if r.phase == "idle" && len(r.queue) > 0 {
+		r.beginWake()
 		if r.startAt.IsZero() {
 			r.startAt = time.Now()
 		}
@@ -493,6 +538,9 @@ func (r *relay) advance() {
 		r.scan("results")
 		return
 	}
+	if r.advanceLifecycle() {
+		return
+	}
 	if r.cfg.RefreshMode == RefreshPerCall && len(r.queue) > 0 && r.queue[0].isToolCall() && r.queue[0].freshBoot != r.proc.ID {
 		// A newly arrived call must not trigger the drain timer on an existing
 		// operation. Wait for its result and all related traffic to be written.
@@ -514,7 +562,11 @@ func (r *relay) advance() {
 	}
 }
 func (r *relay) scanned(e scanDone) {
+	if e.token != 0 && e.token != r.scanSequence {
+		return
+	}
 	r.scanning = false
+	r.scanCancel = nil
 	if r.phase == "closing" {
 		return
 	}
@@ -550,6 +602,10 @@ func (r *relay) scanned(e scanDone) {
 		if r.phase != "idle" && r.phase != "restarting" {
 			return
 		}
+		if r.onDemand() && !r.hasDemand() {
+			r.enterDormant()
+			return
+		}
 		// The old process has already been reaped. Known unrecoverable state
 		// must not start a candidate that cannot initialize successfully.
 		if r.generation != 0 {
@@ -560,6 +616,7 @@ func (r *relay) scanned(e scanDone) {
 		}
 		r.candidate = e.snap
 		r.phase = "starting"
+		r.abandonedStart = false
 		r.startAt = time.Now()
 		r.startingCall = nil
 		if r.cfg.RefreshMode == RefreshPerCall && len(r.queue) > 0 && r.queue[0].isToolCall() {
@@ -567,9 +624,17 @@ func (r *relay) scanned(e scanDone) {
 		}
 		r.startFinished = make(chan struct{})
 		finished := r.startFinished
+		deadline := time.Now().Add(r.cfg.StartupTimeout)
+		if r.onDemand() {
+			deadline = r.demandDeadline(deadline)
+			if refresh := r.refreshDeadline(); !refresh.IsZero() && refresh.Before(deadline) {
+				deadline = refresh
+			}
+		}
+		ctx, c := context.WithDeadline(r.ctx, deadline)
+		r.startCancel = c
 		go func() {
 			defer close(finished)
-			ctx, c := context.WithTimeout(r.ctx, r.cfg.StartupTimeout)
 			defer c()
 			p, err := r.factory.Start(ctx)
 			select {
@@ -593,6 +658,7 @@ func (r *relay) scanned(e scanDone) {
 		r.generation++
 		r.phase = "ready"
 		r.dirtyAt = time.Time{}
+		r.wakeAt = time.Time{}
 		r.retryAt = time.Time{}
 		r.retryDelay = r.cfg.RetryMin
 		r.cfg.Logger.Info("backend ready", "generation", r.generation, "boot_id", r.proc.ID, "pid", r.proc.PID(), "fingerprint", e.snap.Fingerprint.String(), "epoch", e.snap.Epoch, "queued", r.queueCount, "queue_bytes", r.queueBytes)
@@ -616,7 +682,12 @@ func (r *relay) scanned(e scanDone) {
 	}
 }
 func (r *relay) started(e startDone) {
+	r.startCancel = nil
 	if e.err != nil {
+		if r.onDemand() && (r.abandonedStart || !r.hasDemand()) {
+			r.enterDormant()
+			return
+		}
 		r.cfg.Logger.Warn("backend start failed", "error", e.err)
 		r.phase = "restarting"
 		if r.dirtyAt.IsZero() {
@@ -627,6 +698,11 @@ func (r *relay) started(e startDone) {
 		return
 	}
 	r.proc = e.proc
+	r.bootDemandServed = false
+	r.retiringCall = 0
+	r.toolWrittenAt = time.Time{}
+	r.idleSince = time.Time{}
+	r.suspendDeferred = ""
 	if r.startingCall != nil {
 		r.startingCall.freshBoot = e.proc.ID
 		r.startingCall = nil
@@ -643,6 +719,10 @@ func (r *relay) started(e startDone) {
 		}
 	}(e.proc)
 	go r.writeBackend(e.proc.Stdin, r.back, e.proc.ID, e.proc.Done)
+	if r.onDemand() && (r.abandonedStart || !r.hasDemand()) {
+		r.stopCurrent("request_cancelled")
+		return
+	}
 	if r.generation == 0 {
 		r.phase = "publishing"
 		return
@@ -650,18 +730,25 @@ func (r *relay) started(e startDone) {
 	r.phase = "recovering"
 	saved := r.recovery.Clone()
 	boot := e.proc.ID
-	refreshDeadline := r.dirtyAt.Add(r.cfg.RefreshTimeout)
+	refreshDeadline := r.refreshDeadline()
+	if refreshDeadline.IsZero() {
+		refreshDeadline = time.Now().Add(r.cfg.RefreshTimeout)
+	}
+	if r.onDemand() {
+		refreshDeadline = r.demandDeadline(refreshDeadline)
+	}
+	deadline := refreshDeadline
+	stage := time.Now().Add(r.cfg.StartupTimeout)
+	if stage.Before(deadline) {
+		deadline = stage
+	}
+	ctx, c := context.WithDeadline(r.ctx, deadline)
+	r.recoveryCancel = c
 	go func() {
-		deadline := refreshDeadline
-		stage := time.Now().Add(r.cfg.StartupTimeout)
-		if stage.Before(deadline) {
-			deadline = stage
-		}
-		ctx, c := context.WithDeadline(r.ctx, deadline)
 		defer c()
 		exchange := func(ctx context.Context, b []byte) ([]byte, error) {
 			reply := make(chan internalReply, 1)
-			r.emit(internalCall{ctx, b, reply, false})
+			r.emit(internalCall{ctx: ctx, raw: b, reply: reply, boot: boot})
 			select {
 			case v := <-reply:
 				return v.raw, v.err
@@ -671,7 +758,7 @@ func (r *relay) started(e startDone) {
 		}
 		send := func(ctx context.Context, b []byte) error {
 			reply := make(chan internalReply, 1)
-			r.emit(internalCall{ctx, b, reply, true})
+			r.emit(internalCall{ctx: ctx, raw: b, reply: reply, notify: true, boot: boot})
 			select {
 			case v := <-reply:
 				return v.err
@@ -679,15 +766,15 @@ func (r *relay) started(e startDone) {
 				return ctx.Err()
 			}
 		}
-		err := saved.Recover(ctx, exchange, send, func(b []byte) error { return sendFrontInternal(r, ctx, b) })
+		err := saved.Recover(ctx, exchange, send, func(b []byte) error { return sendFrontInternal(r, ctx, b, boot) })
 		r.emit(recoveryDone{boot, err})
 	}()
 }
 
 // Internal frontend notifications are serialized by the same event loop.
-func sendFrontInternal(r *relay, ctx context.Context, b []byte) error {
+func sendFrontInternal(r *relay, ctx context.Context, b []byte, boot uint64) error {
 	reply := make(chan internalReply, 1)
-	r.emit(internalCall{ctx, b, reply, true})
+	r.emit(internalCall{ctx: ctx, raw: b, reply: reply, notify: true, boot: boot})
 	select {
 	case v := <-reply:
 		return v.err
@@ -699,7 +786,21 @@ func (r *relay) stopCurrent(reason string) {
 	if r.proc == nil || r.phase == "stopping" {
 		return
 	}
+	r.stopReason = reason
+	r.stopAt = time.Now()
+	r.stopToIdle = r.onDemand() && (reason == "call_complete" || reason == "idle_timeout" || reason == "request_cancelled" || !r.hasDemand())
+	if r.stopToIdle {
+		// Cleanup owns a separate budget; cancelled demand and dormant time
+		// must not expire a former wake while its process is being reaped.
+		r.wakeAt, r.startAt = time.Time{}, time.Time{}
+	}
+	r.cancelScan()
+	if r.recoveryCancel != nil {
+		r.recoveryCancel()
+		r.recoveryCancel = nil
+	}
 	r.phase = "stopping"
+	r.cfg.Logger.Info("backend stopping", "reason", reason, "boot_id", r.proc.ID, "generation", r.generation, "queued", r.queueCount, "queue_bytes", r.queueBytes, "pending", len(r.pending), "recovery_state_bytes", r.recovery.StateBytes())
 	r.failControls(errors.New(reason))
 	for _, rec := range r.pending {
 		if !rec.cancelled {
@@ -731,8 +832,22 @@ func (r *relay) stopped(e stopDone) {
 		r.fatal = fmt.Errorf("backend cleanup failed: %w", e.err)
 		return
 	}
+	args := []any{"reason", r.stopReason, "boot_id", e.boot, "cleanup_ms", time.Since(r.stopAt).Milliseconds()}
+	if !r.toolWrittenAt.IsZero() {
+		args = append(args, "result_written_to_cleanup_ms", time.Since(r.toolWrittenAt).Milliseconds())
+	}
+	r.cfg.Logger.Info("backend stopped", args...)
 	r.proc = nil
 	r.back = nil
+	r.backPending = nil
+	r.backBytes = 0
+	r.startingCall = nil
+	r.retiringCall = 0
+	r.toolWrittenAt = time.Time{}
+	if r.stopToIdle || (r.onDemand() && !r.hasDemand()) {
+		r.enterDormant()
+		return
+	}
 	r.phase = "restarting"
 	r.startAt = time.Time{}
 }
@@ -758,7 +873,11 @@ func (r *relay) expire() {
 		return
 	}
 	now := time.Now()
-	if !r.dirtyAt.IsZero() && now.Sub(r.dirtyAt) >= r.cfg.RefreshTimeout {
+	if r.onDemand() && r.phase == "starting" && r.abandonedStart && !r.abandonedAt.IsZero() && now.Sub(r.abandonedAt) >= r.cfg.CleanupTimeout {
+		r.fatal = errors.New("abandoned startup cleanup timeout")
+		return
+	}
+	if deadline := r.refreshDeadline(); !deadline.IsZero() && !now.Before(deadline) {
 		r.fatal = errors.New("refresh_timeout: reconnect required")
 		return
 	}
@@ -774,6 +893,10 @@ func (r *relay) expire() {
 		r.invalidate("backend_write_timeout")
 	}
 	for _, q := range r.queue {
+		if r.onDemand() && len(q.msgs) > len(q.records) && now.After(q.deadline) {
+			r.fatal = errors.New("notification queue timeout")
+			return
+		}
 		for _, rec := range q.records {
 			if !rec.cancelled && now.After(rec.deadline) {
 				r.finish(rec, r.proxyError(rec, "request_timeout"), false)
@@ -811,7 +934,7 @@ func (r *relay) internal(c internalCall) {
 		c.reply <- internalReply{err: c.ctx.Err()}
 		return
 	}
-	if r.proc == nil {
+	if r.proc == nil || r.phase == "stopping" || (c.boot != 0 && (r.proc.ID != c.boot || r.phase != "recovering")) {
 		c.reply <- internalReply{err: errors.New("backend unavailable")}
 		return
 	}

@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -167,8 +168,26 @@ func Run(in io.Reader, out io.Writer, cfg Config) error {
 				switch params.Name {
 				case "fixture_hold":
 					continue
+				case "fixture_large":
+					response = result(msg.ID, map[string]any{"content": []map[string]string{{"type": "text", "text": strings.Repeat("x", 1<<20)}}})
 				case "fixture_crash":
 					return fmt.Errorf("requested fixture tool crash after receipt")
+				case "fixture_write_crash":
+					sideEffect, err := os.OpenFile(cfg.Log+".side-effects", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+					if err != nil {
+						return err
+					}
+					_, err = sideEffect.WriteString("executed\n")
+					closeErr := sideEffect.Close()
+					if err != nil {
+						return err
+					}
+					if closeErr != nil {
+						return closeErr
+					}
+					return fmt.Errorf("requested fixture tool crash after side effect")
+				case "fixture_task":
+					response = result(msg.ID, map[string]any{"task": map[string]any{"taskId": snap.Boot, "status": "working", "statusMessage": "pending", "createdAt": "2026-10-22T00:00:00Z", "lastUpdatedAt": "2026-10-22T00:00:00Z", "ttl": 60000}})
 				case "fixture_half":
 					_, _ = io.WriteString(out, `{"jsonrpc":"2.0","id":`)
 					return fmt.Errorf("requested fixture tool exit during response frame")
@@ -185,6 +204,9 @@ func Run(in io.Reader, out io.Writer, cfg Config) error {
 					}
 					continue
 				case "future_tool":
+					if slices.Contains(cfg.Args, "--lifecycle-directory") && snap.Inputs["main.go"] != nil && *snap.Inputs["main.go"] == "B" {
+						response = []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"error":{"code":-32602,"message":"tool removed from catalogue"}}`, msg.ID))
+					}
 				default:
 					response = []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"error":{"code":-32602,"message":"unknown fixture tool"}}`, msg.ID))
 					break
@@ -282,8 +304,26 @@ func Run(in io.Reader, out io.Writer, cfg Config) error {
 				continue
 			case "tools/list":
 				response = []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"future_tool","inputSchema":{"oneOf":[{"type":"null"},{"type":"array"}]},"annotations":{"opaque":true},"x-future":{"n":900719925474099312345}}],"_meta":{"opaque":null}}}`, msg.ID))
+				if slices.Contains(cfg.Args, "--lifecycle-directory") && snap.Inputs["main.go"] != nil && *snap.Inputs["main.go"] == "B" {
+					response = []byte(strings.Replace(string(response), `"name":"future_tool"`, `"name":"changed_tool"`, 1))
+				}
 			case "resources/list":
-				response = result(msg.ID, map[string]any{"resources": []any{}})
+				if slices.Contains(cfg.Args, "--lifecycle-paged") {
+					var params struct {
+						Cursor string `json:"cursor"`
+					}
+					_ = json.Unmarshal(msg.Params, &params)
+					switch params.Cursor {
+					case "":
+						response = result(msg.ID, map[string]any{"resources": []any{map[string]string{"uri": "fixture:///first", "name": "first"}}, "nextCursor": snap.Boot})
+					case snap.Boot:
+						response = result(msg.ID, map[string]any{"resources": []any{map[string]string{"uri": "fixture:///last", "name": "last"}}})
+					default:
+						response = []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"error":{"code":-32602,"message":"cursor belongs to another boot"}}`, msg.ID))
+					}
+				} else {
+					response = result(msg.ID, map[string]any{"resources": []any{}})
+				}
 			case "prompts/list":
 				response = result(msg.ID, map[string]any{"prompts": []any{}})
 			case "resources/subscribe", "resources/unsubscribe", "logging/setLevel", "ping":

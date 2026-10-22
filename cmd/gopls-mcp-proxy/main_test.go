@@ -129,6 +129,44 @@ func TestRefreshModeOptions(t *testing.T) {
 	}
 }
 
+func TestBackendLifecycleOptions(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		mode string
+		idle time.Duration
+	}{
+		{nil, proxy.BackendResident, 10 * time.Second},
+		{[]string{"--refresh-mode=per-call", "--backend-lifecycle=on-demand"}, proxy.BackendOnDemand, 10 * time.Second},
+		{[]string{"--refresh-mode=per-call", "--backend-lifecycle=on-demand", "--backend-idle-timeout=2s", "--", "gopls", "mcp"}, proxy.BackendOnDemand, 2 * time.Second},
+	} {
+		o, err := parseOptions(tc.args, io.Discard)
+		if err != nil || o.cfg.BackendLifecycle != tc.mode || o.cfg.BackendIdleTimeout != tc.idle {
+			t.Fatalf("%q: config=%+v err=%v", tc.args, o.cfg, err)
+		}
+	}
+	for _, args := range [][]string{
+		{"--backend-lifecycle=on-demand"},
+		{"--backend-lifecycle=unknown"},
+		{"--backend-lifecycle="},
+		{"--refresh-mode=per-call", "--backend-lifecycle=on-demand", "--backend-idle-timeout=0s"},
+		{"--refresh-mode=per-call", "--backend-lifecycle=on-demand", "--backend-idle-timeout=-1s"},
+	} {
+		called := false
+		err := runWithSetup(context.Background(), args, io.Discard, func(context.Context, options) error {
+			called = true
+			return nil
+		})
+		if err == nil || called {
+			t.Fatalf("invalid lifecycle entered setup: %q err=%v called=%v", args, err, called)
+		}
+	}
+	args := []string{"--backend-lifecycle", "unknown", "--backend-idle-timeout", "0s"}
+	o, err := parseOptions(append([]string{"--", "program"}, args...), io.Discard)
+	if err != nil || !slices.Equal(o.argv, args) || o.cfg.BackendLifecycle != proxy.BackendResident {
+		t.Fatalf("backend arguments interpreted by proxy: %+v %v", o, err)
+	}
+}
+
 func TestLocalDiagnosticsDoNotEnterRuntimeSetup(t *testing.T) {
 	// The injected setup owns every operation that can capture cwd/env or self
 	// identity, resolve a backend, create a tracker, run Go, or spawn a process.
