@@ -1,0 +1,241 @@
+{
+  "schema_version": 1,
+  "record_type": "fixed_product_local_verification",
+  "index_generated_at": "2026-10-22T08:36:52.423036+00:00",
+  "source_record": {
+    "recorded_at": "2026-10-22T08:32:10.317589+00:00",
+    "revision": "4a3a95f98230f4ced6a13e973f1d89b6715220b2",
+    "tree": "88181eb03dc9b04b947439547e0b0065387bcede",
+    "worktree": "",
+    "go": "go version go1.27.2 linux/amd64",
+    "go_path": "/workspace/scratch/5acb4cb46492/toolchain/go/bin/go",
+    "platform": "Linux-6.18.55-x86_64-with-glibc2.39",
+    "scope": "synthetic local correctness/soak; real Mac/Codex not run",
+    "test_command": "GOPLS_INTEGRATION=1 GOPLS_EXPECTED_VERSION=v0.24.0 GOPLS_LIFECYCLE_CYCLES=100 GOPLS_BIN=/workspace/scratch/446b897ba430/toolchain/gopls-v0.24.0/gopls PROXY_TEST_EVIDENCE_DIR=/workspace/scratch/dd5ed62e3992/evidence/pr8-fixed/real go test -json ./integration -run '^TestRealGoplsOnDemand(Lifecycle|KilledParentSidecarExit)$' -count=1 -timeout=20m"
+  },
+  "test_run": {
+    "started_at": "2026-10-22T10:32:14.114097582+02:00",
+    "ended_at": "2026-10-22T10:35:27.406963136+02:00",
+    "elapsed_seconds": 193.293,
+    "race": false,
+    "result": "pass",
+    "cycles_per_regular_mode": 100,
+    "fault_case_cycles": 3,
+    "skipped_tests": [],
+    "failed_tests": []
+  },
+  "unit_run": {
+    "started_at": "2026-10-22T10:32:15.161980023+02:00",
+    "ended_at": "2026-10-22T10:32:17.887679468+02:00",
+    "race": true,
+    "test_pass_events": 336,
+    "failed_tests": [],
+    "skipped_tests": [],
+    "package_passes": [
+      "github.com/fredgnr/gopls-mcp-proxy/internal/protocol",
+      "github.com/fredgnr/gopls-mcp-proxy/internal/launcher",
+      "github.com/fredgnr/gopls-mcp-proxy/cmd/gopls-mcp-proxy",
+      "github.com/fredgnr/gopls-mcp-proxy/internal/wire",
+      "github.com/fredgnr/gopls-mcp-proxy/internal/workspace",
+      "github.com/fredgnr/gopls-mcp-proxy/internal/backend",
+      "github.com/fredgnr/gopls-mcp-proxy/internal/proxy"
+    ]
+  },
+  "binary_identity": {
+    "proxy_sha256": "2752e2ac43a19af111a2b942dd19b45c0562601f937406472df79e37f0ddc36d",
+    "proxy_reported_version": "gopls-mcp-proxy dev (commit unknown)",
+    "proxy_build_vcs_revision": "4a3a95f98230f4ced6a13e973f1d89b6715220b2",
+    "proxy_build_vcs_modified": false,
+    "proxy_build_toolchain": "go1.27.2",
+    "test_go_version": "go1.27.2",
+    "gopls_sha256": "dfb525874833cb1fd6f8a72c14e5d711c9958197b1983407fce32e871b54984f",
+    "gopls_version": "golang.org/x/tools/gopls v0.24.0",
+    "gopls_build_toolchain": "go1.27.2",
+    "full_build_info_location": "All three lifecycle-summary.json files contain proxy_build_info and gopls_build_info recorded before temporary binary deletion."
+  },
+  "archive": {
+    "path": "fixed-local100-evidence.zip",
+    "bytes": 479817,
+    "sha256": "9f54d91f5ecc189d8a3cb8a292d2dfccaa20c8894bd6e3c2319af257fde270ed",
+    "files": [
+      {
+        "path": "pr8-fixed/real/TestRealGoplsOnDemandKilledParentSidecarExit/lifecycle-summary.json",
+        "bytes": 16543,
+        "sha256": "e9fc5ca3b16a70cded9d151f1c8bb081c5aa808921a1597dcca89f42bee7c721",
+        "kind": "final_fixed_run"
+      },
+      {
+        "path": "pr8-fixed/real/TestRealGoplsOnDemandKilledParentSidecarExit/process-samples.json",
+        "bytes": 467548,
+        "sha256": "96925672522ced6954e713fadc3262af0870fc68c68590236bfb2131f12f98b8",
+        "kind": "final_fixed_run"
+      },
+      {
+        "path": "pr8-fixed/real/TestRealGoplsOnDemandKilledParentSidecarExit/proxy.log",
+        "bytes": 6883,
+        "sha256": "fcd6e2cd80ec91fefe33c35f152e29b67540b851eb173fad6b2e9a02baeb5fa4",
+        "kind": "final_fixed_run"
+      },
+      {
+        "path": "pr8-fixed/real/TestRealGoplsOnDemandLifecycle_on-demand/lifecycle-summary.json",
+        "bytes": 64455,
+        "sha256": "dd0f52fc1864a57df5f5e2ef3751a4359f7d221b1b30e77d5f61f7f42a23386f",
+        "kind": "final_fixed_run"
+      },
+      {
+        "path": "pr8-fixed/real/TestRealGoplsOnDemandLifecycle_on-demand/process-samples.json",
+        "bytes": 6849354,
+        "sha256": "ea5e5e15e5b18e2bf1ab12feefba9e80b4e23181fc9a1623aa775533385f9173",
+        "kind": "final_fixed_run"
+      },
+      {
+        "path": "pr8-fixed/real/TestRealGoplsOnDemandLifecycle_on-demand/proxy.log",
+        "bytes": 118641,
+        "sha256": "af4285c735ce3ae82f5796924e9fb86fc2cc5802af4a6832701ff7a9a6c65614",
+        "kind": "final_fixed_run"
+      },
+      {
+        "path": "pr8-fixed/real/TestRealGoplsOnDemandLifecycle_resident/lifecycle-summary.json",
+        "bytes": 63513,
+        "sha256": "14d0d618298772dbf49c79f5a73ad9e60362b2136b17fac6a9a9c5f3cceec33a",
+        "kind": "final_fixed_run"
+      },
+      {
+        "path": "pr8-fixed/real/TestRealGoplsOnDemandLifecycle_resident/process-samples.json",
+        "bytes": 7682282,
+        "sha256": "b8c882b2e520a1591e28b26a4a5fd3f4b548bc13a28446925791f2776c146e0d",
+        "kind": "final_fixed_run"
+      },
+      {
+        "path": "pr8-fixed/real/TestRealGoplsOnDemandLifecycle_resident/proxy.log",
+        "bytes": 111976,
+        "sha256": "c9c2d7afb6bd173e9c41fd877296fad5d8277c44ce8263f9cc8734e0451ecdbc",
+        "kind": "final_fixed_run"
+      },
+      {
+        "path": "pr8-fixed/real-gate.json",
+        "bytes": 263,
+        "sha256": "aca4999704b7ffa4d11d6fc592254b0c46c0f29182c2e8611a4bc52546491c7f",
+        "kind": "final_fixed_run"
+      },
+      {
+        "path": "pr8-fixed/real.json",
+        "bytes": 5096,
+        "sha256": "d8e1edb9aa37302684fa6b3a3774aa8db083b964d1fdf22fac58cdb7f0ec9f2b",
+        "kind": "final_fixed_run"
+      },
+      {
+        "path": "pr8-fixed/source.json",
+        "bytes": 788,
+        "sha256": "513a15eb695b9ed3e44eef2d4dd74aaeda76521c3b334b9843797073643eacbc",
+        "kind": "final_fixed_run"
+      },
+      {
+        "path": "pr8-fixed/unit-gate.json",
+        "bytes": 1771,
+        "sha256": "e3acf34b3fbbfe9e0480ec36c018584f53ca5edc4d4acc379ed0e6b3b5953850",
+        "kind": "final_fixed_run"
+      },
+      {
+        "path": "pr8-fixed/unit-race.json",
+        "bytes": 367111,
+        "sha256": "faa20ce87a5978ae0357caa9a09b3e7783e316060d870a9112a1b231b712f230",
+        "kind": "final_fixed_run"
+      },
+      {
+        "path": "auxiliary-pre-fix-reproductions/pr8-pristine-before.log",
+        "bytes": 304,
+        "sha256": "28d927d569b749b941087027b4318f71c0a4e98fb864171708ed3d7dbf82619c",
+        "kind": "auxiliary_pre_fix_test_added_worktree"
+      },
+      {
+        "path": "auxiliary-pre-fix-reproductions/url-elicitation-before.log",
+        "bytes": 1159,
+        "sha256": "31f63b6f842fb1c60dc6d2fb39624e1a224799c2b3e3a0d5d83ccc4fd8e1c6ce",
+        "kind": "auxiliary_pre_fix_test_added_worktree"
+      }
+    ]
+  },
+  "gates": {
+    "source_revision": "4a3a95f98230f4ced6a13e973f1d89b6715220b2",
+    "script_path": "scripts/check-lifecycle-tests.py",
+    "script_sha256": "6799440b7bf288c7dabc007273b0aa8e7ce4af46b81c3dc75353c562c1d94e8a",
+    "unit_output": "unit-gate.json",
+    "real_output": "real-gate.json",
+    "status": "pass"
+  },
+  "results": [
+    {
+      "case": "TestRealGoplsOnDemandKilledParentSidecarExit",
+      "mode": "on-demand",
+      "cycles": 3,
+      "initial_parent_killed": true,
+      "backend_start_count": 5,
+      "telemetry_observed": 5,
+      "sample_count": 296,
+      "observation_status": "observed",
+      "observation_errors": null,
+      "all_owned_have_exit_and_absence": true,
+      "max_telemetry_absent_after_parent_exit_ms": 20,
+      "telemetry_absence_budget_ms": 6100,
+      "dormant_proxy_fd_count_samples": 3,
+      "dormant_proxy_fd_unique_values": [
+        6
+      ],
+      "proxy_fd_min": 6,
+      "proxy_fd_max": 9,
+      "sampled_residency_ratio": 0.8648648648648649
+    },
+    {
+      "case": "TestRealGoplsOnDemandLifecycle_on-demand",
+      "mode": "on-demand",
+      "cycles": 100,
+      "initial_parent_killed": false,
+      "backend_start_count": 102,
+      "telemetry_observed": 102,
+      "sample_count": 4223,
+      "observation_status": "observed",
+      "observation_errors": null,
+      "all_owned_have_exit_and_absence": true,
+      "max_telemetry_absent_after_parent_exit_ms": 61,
+      "telemetry_absence_budget_ms": 6100,
+      "dormant_proxy_fd_count_samples": 100,
+      "dormant_proxy_fd_unique_values": [
+        6
+      ],
+      "proxy_fd_min": 4,
+      "proxy_fd_max": 13,
+      "sampled_residency_ratio": 0.7603599336964243
+    },
+    {
+      "case": "TestRealGoplsOnDemandLifecycle_resident",
+      "mode": "resident",
+      "cycles": 100,
+      "initial_parent_killed": false,
+      "backend_start_count": 101,
+      "telemetry_observed": 101,
+      "sample_count": 4464,
+      "observation_status": "observed",
+      "observation_errors": null,
+      "all_owned_have_exit_and_absence": true,
+      "max_telemetry_absent_after_parent_exit_ms": 61,
+      "telemetry_absence_budget_ms": 6100,
+      "dormant_proxy_fd_count_samples": 0,
+      "dormant_proxy_fd_unique_values": [],
+      "proxy_fd_min": 6,
+      "proxy_fd_max": 13,
+      "sampled_residency_ratio": 0.8985215053763441
+    }
+  ],
+  "auxiliary_reproduction_limits": "The two pre-fix failure logs were captured after adding deterministic tests to the old implementation, not from a clean original HEAD. No separate exact worktree tree/toolchain metadata was captured for those reproduction invocations. They illustrate the regressions only and are not acceptance evidence for the final source.",
+  "ci_reference": {
+    "url": "https://github.com/fredgnr/gopls-mcp-proxy/actions/runs/39748428008",
+    "status_at_index_time": "pending; consult linked Actions run for current result",
+    "scope": "bounded cross-platform matrix; independent of this local100 artifact"
+  },
+  "limits": [
+    "Non-race synthetic single-session correctness/soak workload; not a controlled production memory benchmark.",
+    "No actual Mac/Codex client validation.",
+    "Attribution and absence only for sampled owned processes; no arbitrary complete daemonized-tree guarantee."
+  ]
+}
