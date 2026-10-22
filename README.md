@@ -211,6 +211,8 @@ GOPLS_INTEGRATION=1 GOPLS_EXPECTED_VERSION=v0.24.0 GOPLS_BIN="$(command -v gopls
 
 CI 分别执行组件 race 测试、必跑 raw 协议/刷新测试、真实 gopls 互通和二进制构建，保存 JSON 测试日志。Linux/macOS 及最低 Go 版本矩阵以当前提交的 Actions 结果为准；设计用例尚未覆盖的组合不会因某个组件测试通过就被记为通过。详见[验证范围](docs/validation.md)和[实现设计](docs/design.md)。
 
+每个 CI 测试、构建和发布 job 还会每 5 秒采集 runner 的 CPU、内存、磁盘和网络指标。运行结束后，在 Actions 的 Job Summary 查看曲线与步骤耗时，或下载保留 7 天的 `telemetry-*` artifact 中的 `metrics.json`。这些数据用于定位 CI 资源瓶颈；采集失败不改变测试结果。指标口径和使用方式见 [CI 性能监控](docs/ci-performance-monitoring.md)。
+
 ## 二进制与发布
 
 [GitHub Releases](https://github.com/fredgnr/gopls-mcp-proxy/releases) 的构建目标为 `darwin_arm64`、`darwin_amd64`、`linux_amd64`、`linux_arm64`。每个包包含代理、README 和 `BUILDINFO`，同时提供 `checksums.txt`。macOS 可用 `shasum -a 256`、Linux 可用 `sha256sum` 核对下载包。包内不包含 gopls。使用默认入口时将原生 gopls 保留在代理旁边，或放在 PATH 的绝对目录中；不要把代理覆盖为原生 gopls 文件。

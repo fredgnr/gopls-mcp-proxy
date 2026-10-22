@@ -5,12 +5,23 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      - name: Collect workflow telemetry
+        uses: ycfreeman/workflow-telemetry-action@72ec425db8a31670fdc4419966940a6d980a0b49 # v3.0.2
+        continue-on-error: true
+        with:
+          github_token: ${{ github.token }}
+          metric_frequency: '5'
+          comment_on_pr: 'false'
+          job_summary: 'true'
+          proc_trace_chart_show: 'false'
+          proc_trace_table_show: 'false'
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
@@ -36,3 +47,20 @@ jobs:
           compression-level: 0
           retention-days: 14
           overwrite: true
+      - name: Export workflow telemetry
+        id: telemetry-export
+        if: always()
+        continue-on-error: true
+        timeout-minutes: 1
+        shell: bash
+        run: python3 scripts/export-workflow-telemetry.py
+      - name: Upload workflow telemetry
+        if: always() && steps.telemetry-export.outputs.file != ''
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: ${{ steps.telemetry-export.outputs.artifact }}
+          path: ${{ steps.telemetry-export.outputs.file }}
+          if-no-files-found: error
+          retention-days: 7
