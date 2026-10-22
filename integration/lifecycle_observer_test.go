@@ -171,7 +171,7 @@ func (o *lifecycleObserver) observe(processes []lifecycleProcess, err error) {
 		if ok && p.NamespacePID == 0 {
 			p.NamespacePID = owned.Process.NamespacePID
 		} // immutable alias may be unreadable after exit
-		if ok && p.SID == "unavailable:zombie" && owned.Process.SID != "" {
+		if ok && strings.HasPrefix(p.SID, "unavailable:") && owned.Process.SID != "" {
 			p.SID = owned.Process.SID
 		}
 		if ok && owned.Kind == "descendant" && strings.Contains(p.Command, "telemetry") {
@@ -495,7 +495,13 @@ func TestRawLifecycleObserverOwnershipSurvivesReparenting(t *testing.T) {
 	if o.owned[sidecar.identity()].ExitMS != nil || o.owned[main.identity()].ExitMS == nil || o.owned[reused.identity()] != nil {
 		t.Fatal("reparenting/PID reuse corrupted identity")
 	}
+	sidecar.SID = "unavailable:exiting"
+	o.observe([]lifecycleProcess{proxy, sidecar}, nil)
+	if o.owned[sidecar.identity()].ExitMS != nil || o.owned[sidecar.identity()].GoneMS != nil || o.owned[sidecar.identity()].Process.SID != "900003" {
+		t.Fatal("unavailable session lost known identity or was mistaken for process exit")
+	}
 	sidecar.State = "Z"
+	sidecar.SID = "unavailable:zombie"
 	sidecar.NamespacePID = 0 // /proc namespace aliases may disappear for a zombie
 	o.observe([]lifecycleProcess{proxy, sidecar}, nil)
 	if o.owned[sidecar.identity()].ExitMS == nil || o.owned[sidecar.identity()].GoneMS != nil {

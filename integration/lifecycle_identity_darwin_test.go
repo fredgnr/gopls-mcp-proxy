@@ -3,6 +3,7 @@
 package integration
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -69,6 +70,14 @@ func refineLifecycleIdentity(p lifecycleProcess, snapshotStarted time.Time) (lif
 		return p, nil
 	}
 	if sidErr != nil {
+		if errors.Is(sidErr, unix.ESRCH) {
+			// Darwin can remove an exiting process from getsid's lookup before
+			// KERN_PROC_PID reports it as a zombie. The same-birth recheck above
+			// proves that its process entry still exists: retain it as present
+			// until a later snapshot proves termination or disappearance.
+			p.SID = "unavailable:exiting"
+			return p, nil
+		}
 		return p, fmt.Errorf("session unavailable for still-present pid %d: %v", p.PID, sidErr)
 	}
 	p.SID = strconv.Itoa(sid)

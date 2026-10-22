@@ -1,11 +1,13 @@
 package integration
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"os/exec"
@@ -158,7 +160,7 @@ func testRealLifecycle(t *testing.T, mode string, cycles int, killParent bool) {
 		killObservedLifecycleMain(t, observer, initialBoots[0].PID)
 	}
 	if mode == "on-demand" {
-		waitLifecycleBootExit(t, observer, initialBoots[0].PID, 7*time.Second)
+		waitLifecycleBootExit(t, p, observer, initialBoots[0].PID, 7*time.Second)
 		observer.waitEmpty(t, 6*time.Second, 6*time.Second)
 	}
 	for i := 0; i < cycles; i++ {
@@ -175,7 +177,7 @@ func testRealLifecycle(t *testing.T, mode string, cycles int, killParent bool) {
 		}
 		current := boots[len(boots)-1]
 		if mode == "on-demand" {
-			waitLifecycleBootExit(t, observer, current.PID, 7*time.Second)
+			waitLifecycleBootExit(t, p, observer, current.PID, 7*time.Second)
 			observer.waitEmpty(t, 6*time.Second, 6*time.Second)
 			last := observer.latest(t)
 			dormantFDs = append(dormantFDs, last.ProxyFD)
@@ -210,7 +212,7 @@ func testRealLifecycle(t *testing.T, mode string, cycles int, killParent bool) {
 	}
 	if mode == "on-demand" {
 		boots := readLifecycleBoots(t, p.log)
-		waitLifecycleBootExit(t, observer, boots[len(boots)-1].PID, 7*time.Second)
+		waitLifecycleBootExit(t, p, observer, boots[len(boots)-1].PID, 7*time.Second)
 		observer.waitEmpty(t, 6*time.Second, 6*time.Second)
 	}
 	p.shutdown()
@@ -326,26 +328,113 @@ func testRealLifecycle(t *testing.T, mode string, cycles int, killParent bool) {
 	}
 	t.Logf("mode=%s cycles=%d starts=%d telemetry=%d sampled_residency=%.3f peak_group_rss=%d", mode, cycles, len(boots), sidecars, float64(liveSamples)/float64(sampleCount), peak)
 }
-func waitLifecycleBootExit(t *testing.T, o *lifecycleObserver, pid int, budget time.Duration) {
+func waitLifecycleBootExit(t *testing.T, peer *rawPeer, o *lifecycleObserver, pid int, budget time.Duration) {
 	t.Helper()
-	deadline := time.Now().Add(budget)
-	for time.Now().Before(deadline) {
+	if waitLifecycleTraffic(t, peer, budget, func() bool {
 		o.mu.Lock()
-		seen, exited := false, false
-		for _, p := range o.owned {
-			if p.Kind == "main" && p.Process.NamespacePID == pid {
-				seen = true
-				exited = p.ExitMS != nil
-				break
+		defer o.mu.Unlock()
+		for _, process := range o.owned {
+			if process.Kind == "main" && process.Process.NamespacePID == pid {
+				return process.ExitMS != nil
 			}
 		}
-		o.mu.Unlock()
-		if seen && exited {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
+		return false
+	}) {
+		return
 	}
 	t.Fatalf("main pid %d did not have an observed live-to-exit transition within %s (missing coverage is unverified)", pid, budget)
+}
+
+// The client stays responsive after the terminal response: gopls may ask for
+// roots asynchronously while becoming idle. Only this waiter consumes frames
+// while it runs; p.response resumes owning them for the next client request.
+// A background reader would race p.response and could steal its terminal frame.
+func waitLifecycleTraffic(t *testing.T, peer *rawPeer, budget time.Duration, complete func() bool) bool {
+	t.Helper()
+	timer := time.NewTimer(budget)
+	defer timer.Stop()
+	poll := time.NewTicker(20 * time.Millisecond)
+	defer poll.Stop()
+	for {
+		if complete() {
+			return true
+		}
+		select {
+		case raw, open := <-peer.frames:
+			if !open {
+				t.Fatal("frontend closed while waiting for backend lifecycle completion")
+			}
+			var msg struct {
+				ID     json.RawMessage `json:"id"`
+				Method string          `json:"method"`
+			}
+			if err := json.Unmarshal(raw, &msg); err != nil {
+				t.Fatalf("invalid idle client frame: %s (%v)", raw, err)
+			}
+			if msg.Method == "roots/list" && len(msg.ID) != 0 {
+				peer.reverseIDs = append(peer.reverseIDs, string(msg.ID))
+				roots, err := json.Marshal(peer.roots)
+				if err != nil {
+					t.Fatal(err)
+				}
+				peer.send(fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"result":{"roots":%s,"_meta":{"client":true}}}`, msg.ID, roots))
+			} else if msg.Method != "" && len(msg.ID) == 0 {
+				peer.notifications = append(peer.notifications, raw)
+			} else {
+				t.Fatalf("unexpected response or reverse method during lifecycle wait: %s", raw)
+			}
+		case <-poll.C:
+		case <-timer.C:
+			return complete()
+		}
+	}
+}
+
+// Queue the reverse request only AFTER the ping response has returned. The
+// completion condition depends on the actual client reply, not an arbitrary
+// delay or a background consumer racing with rawPeer.response.
+func TestRawLifecycleWaitServicesLateReverseRequest(t *testing.T) {
+	input, output := io.Pipe()
+	t.Cleanup(func() { input.Close(); output.Close() })
+	peer := &rawPeer{t: t, in: output, frames: make(chan []byte, 3), timeout: time.Second,
+		roots: []map[string]string{{"uri": "file:///late-root", "name": "actual client"}}}
+	peer.frames <- []byte(`{"jsonrpc":"2.0","id":1,"result":{}}`)
+	peer.response("1")
+	peer.frames <- []byte(`{"jsonrpc":"2.0","method":"notifications/message","params":{"level":"info","data":"late notification"}}`)
+	peer.frames <- []byte(`{"jsonrpc":"2.0","id":"late-roots","method":"roots/list","params":{}}`)
+	type reply struct {
+		raw []byte
+		err error
+	}
+	replies := make(chan reply, 1)
+	go func() {
+		raw, err := bufio.NewReader(input).ReadBytes('\n')
+		replies <- reply{raw, err}
+	}()
+	var received reply
+	if !waitLifecycleTraffic(t, peer, time.Second, func() bool {
+		select {
+		case received = <-replies:
+			return true
+		default:
+			return false
+		}
+	}) {
+		t.Fatal("late reverse roots request was not serviced")
+	}
+	var response struct {
+		ID     string `json:"id"`
+		Result struct {
+			Roots []map[string]string `json:"roots"`
+		} `json:"result"`
+	}
+	if received.err != nil || json.Unmarshal(received.raw, &response) != nil || response.ID != "late-roots" ||
+		len(response.Result.Roots) != 1 || response.Result.Roots[0]["uri"] != "file:///late-root" {
+		t.Fatalf("late reverse response did not preserve the real client roots: %s (%v)", received.raw, received.err)
+	}
+	if len(peer.notifications) != 1 || len(peer.reverseIDs) != 1 {
+		t.Fatalf("idle traffic accounting: notifications=%d reverse=%v", len(peer.notifications), peer.reverseIDs)
+	}
 }
 
 // Killing only the recorded, identity-checked backend exercises telemetry's

@@ -14,7 +14,7 @@ def main():
         paths += sorted((root / "internal/proxy").glob("*on_demand*_test.go"))
         prefix = "Test"
     elif kind == "raw":
-        paths = [root / "integration/on_demand_test.go", root / "integration/lifecycle_observer_test.go"]
+        paths = [root / "integration/on_demand_test.go", root / "integration/lifecycle_observer_test.go", root / "integration/on_demand_real_gopls_test.go"]
         prefix = "TestRaw"
     elif kind == "real":
         paths = [root / "integration/on_demand_real_gopls_test.go"]
