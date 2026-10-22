@@ -1,0 +1,173 @@
+{
+  "schema_version": 1,
+  "record_type": "published_original_local_run_with_retrospective_index",
+  "index_generated_at": "2026-10-22T08:30:20.663921+00:00",
+  "source_record": {
+    "revision": "1f3d8558c8a2396f84ed6d87605628145d579171",
+    "tree": "240010a9d72c92cb3613808fe4818e1144e30ed2",
+    "worktree": "",
+    "platform": "Linux-6.18.55-x86_64-with-glibc2.39",
+    "scope": "local verification; actual Codex host validation pending"
+  },
+  "test_run": {
+    "started_at": "2026-10-22T09:32:49.753481988+02:00",
+    "ended_at": "2026-10-22T09:37:04.759709664+02:00",
+    "elapsed_seconds": 255.006,
+    "run_timestamps_source": "Original test JSON timestamps preserved with their +02:00 offset; presentation may convert to Asia/Shanghai.",
+    "race": false,
+    "gopls_expected_version": "v0.24.0",
+    "cycles_per_regular_mode": 100,
+    "fault_case_cycles": 3
+  },
+  "binary_identity": {
+    "proxy_sha256": "e1f62a8fa87a1ecb8b932b29ebfada10d3f18d24fc5b42ba15c95cad5938d351",
+    "proxy_reported_version": "dev",
+    "proxy_reported_commit": "unknown",
+    "proxy_build_info": "not captured; original temporary binary removed by TestMain",
+    "gopls_sha256": "dfb525874833cb1fd6f8a72c14e5d711c9958197b1983407fce32e871b54984f",
+    "gopls_version": "golang.org/x/tools/gopls v0.24.0",
+    "gopls_build_toolchain": "go1.27.2 (recorded inside all lifecycle-summary.json gopls_build_info)",
+    "go_test_toolchain": "go1.27.2 selected by explicit PATH in original execution command; no separate contemporaneous go version file was captured"
+  },
+  "archive": {
+    "path": "prior-local100-original.zip",
+    "bytes": 514825,
+    "sha256": "df2e0e70056730596ae3cb1e2fca599217c3025c5c21b9ab1d5c6d1f63f7a1ba",
+    "files": [
+      {
+        "path": "real-soak-v024-verified.json",
+        "bytes": 5100,
+        "sha256": "7284fe4c533d7b7ef777f365e746faa81db2acca83d7a9c605d827f0e6ad00cb"
+      },
+      {
+        "path": "real-soak-v024-verified/TestRealGoplsOnDemandKilledParentSidecarExit/lifecycle-summary.json",
+        "bytes": 15418,
+        "sha256": "3ae69ea0d7e5beab6681ae4fa7028a0e892a21ae978327923d7bd640fdb09a3a"
+      },
+      {
+        "path": "real-soak-v024-verified/TestRealGoplsOnDemandKilledParentSidecarExit/process-samples.json",
+        "bytes": 563475,
+        "sha256": "078bb36443f55159e87a31fc05aaaa6c6b190017e8f9d0278ee9aa0343ca1d00"
+      },
+      {
+        "path": "real-soak-v024-verified/TestRealGoplsOnDemandKilledParentSidecarExit/proxy.log",
+        "bytes": 6890,
+        "sha256": "c11c202aab4864471cca50f12d963c0e306e4454b606a6cd2c1660f1c70679ad"
+      },
+      {
+        "path": "real-soak-v024-verified/TestRealGoplsOnDemandLifecycle_on-demand/lifecycle-summary.json",
+        "bytes": 63340,
+        "sha256": "431386248209511d08cb22af8ba780a53ee4d51f01c6afcdb86e5c67be7677ec"
+      },
+      {
+        "path": "real-soak-v024-verified/TestRealGoplsOnDemandLifecycle_on-demand/process-samples.json",
+        "bytes": 7605580,
+        "sha256": "647c91f3e288ba677cf8af90a7df978f4064e9538f0e827f9f9fb8037faed13c"
+      },
+      {
+        "path": "real-soak-v024-verified/TestRealGoplsOnDemandLifecycle_on-demand/proxy.log",
+        "bytes": 118663,
+        "sha256": "453e98818491e62202fe194a555aeab4ebc3cc0b0aaa8f03a8528732ccf071e6"
+      },
+      {
+        "path": "real-soak-v024-verified/TestRealGoplsOnDemandLifecycle_resident/lifecycle-summary.json",
+        "bytes": 62433,
+        "sha256": "f402a514174ce7e90eb7c251a5bf8b7d18d866205657c06c644044a5568c77f4"
+      },
+      {
+        "path": "real-soak-v024-verified/TestRealGoplsOnDemandLifecycle_resident/process-samples.json",
+        "bytes": 10456206,
+        "sha256": "ce13b281142719f885fcf5440baa1f43cc4f6cb10aa0a72beeb7fe9cbb606cbc"
+      },
+      {
+        "path": "real-soak-v024-verified/TestRealGoplsOnDemandLifecycle_resident/proxy.log",
+        "bytes": 112023,
+        "sha256": "37a2ee8da793dd34d305995dd203cc3906075e076ba170e48eb06182924fc5c6"
+      },
+      {
+        "path": "source-final.json",
+        "bytes": 257,
+        "sha256": "c7b431c13427666ae2fd9af62fbecf203e2902eff3ffd6215be1b47226964ce0"
+      }
+    ]
+  },
+  "strict_gate_regenerated": {
+    "output": "strict-gate-regenerated.json",
+    "source_revision": "1f3d8558c8a2396f84ed6d87605628145d579171",
+    "script_path": "scripts/check-lifecycle-tests.py",
+    "script_sha256": "cdcd41606c8a6b7e37d144d1521b5a0efe5c88f2ebf967d67f7902c0d3c1c6e6",
+    "required_test_source": "integration/on_demand_real_gopls_test.go",
+    "required_test_source_sha256": "136c1f69699660f4f89bd8c565ed739d6fbe0d86a6b7b29e8d4d76e325d76a55",
+    "exit_code": 0,
+    "note": "Original gate passed in the execution transcript but its stdout was not retained as a file. This file was regenerated during review against untouched original logs using the original revision checker and test-name source."
+  },
+  "results": [
+    {
+      "case": "TestRealGoplsOnDemandKilledParentSidecarExit",
+      "mode": "on-demand",
+      "cycles": 3,
+      "initial_parent_killed": true,
+      "backend_start_count": 5,
+      "telemetry_observed": 5,
+      "sample_count": 353,
+      "observation_status": "observed",
+      "observation_errors": null,
+      "all_owned_have_exit_and_absence": true,
+      "max_telemetry_absent_after_parent_exit_ms": 40,
+      "telemetry_absence_budget_ms": 6100,
+      "dormant_proxy_fd_count_samples": 3,
+      "dormant_proxy_fd_unique_values": [
+        6
+      ],
+      "proxy_fd_min": 4,
+      "proxy_fd_max": 12,
+      "sampled_residency_ratio": 0.8725212464589235
+    },
+    {
+      "case": "TestRealGoplsOnDemandLifecycle_on-demand",
+      "mode": "on-demand",
+      "cycles": 100,
+      "initial_parent_killed": false,
+      "backend_start_count": 102,
+      "telemetry_observed": 102,
+      "sample_count": 4729,
+      "observation_status": "observed",
+      "observation_errors": null,
+      "all_owned_have_exit_and_absence": true,
+      "max_telemetry_absent_after_parent_exit_ms": 587,
+      "telemetry_absence_budget_ms": 6100,
+      "dormant_proxy_fd_count_samples": 100,
+      "dormant_proxy_fd_unique_values": [
+        6
+      ],
+      "proxy_fd_min": 4,
+      "proxy_fd_max": 13,
+      "sampled_residency_ratio": 0.7743709029393107
+    },
+    {
+      "case": "TestRealGoplsOnDemandLifecycle_resident",
+      "mode": "resident",
+      "cycles": 100,
+      "initial_parent_killed": false,
+      "backend_start_count": 101,
+      "telemetry_observed": 101,
+      "sample_count": 6214,
+      "observation_status": "observed",
+      "observation_errors": null,
+      "all_owned_have_exit_and_absence": true,
+      "max_telemetry_absent_after_parent_exit_ms": 161,
+      "telemetry_absence_budget_ms": 6100,
+      "dormant_proxy_fd_count_samples": 0,
+      "dormant_proxy_fd_unique_values": [],
+      "proxy_fd_min": 5,
+      "proxy_fd_max": 13,
+      "sampled_residency_ratio": 0.9139040875442549
+    }
+  ],
+  "limits": [
+    "Non-race synthetic single-session correctness/soak workload; not a controlled production memory benchmark.",
+    "No actual Mac/Codex client validation.",
+    "Attribution and absence only for sampled owned processes; no arbitrary complete daemonized-tree guarantee.",
+    "This old run does not validate later product fixes."
+  ]
+}

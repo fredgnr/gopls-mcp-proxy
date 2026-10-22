@@ -1,0 +1,9 @@
+{
+  "suite": "real",
+  "status": "pass",
+  "tests": [
+    "TestRealGoplsOnDemandKilledParentSidecarExit",
+    "TestRealGoplsOnDemandLifecycle"
+  ],
+  "scope": "sampled attributed main/telemetry and protocol assertions; not complete process trees or real Codex"
+}
