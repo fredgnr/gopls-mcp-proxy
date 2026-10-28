@@ -27,7 +27,7 @@ with patch.dict(sys.modules, {"generate": GENERATE}):
 
 
 def template():
-    lines = ['class GoplsMcpProxy < Formula', '  version "@VERSION@"']
+    lines = ['class GoplsMcpProxy < Formula', '  version "@VERSION@"', '@REVISION@']
     for target in GENERATE.TARGETS:
         lines.extend([
             f'  url "https://github.com/{GENERATE.REPOSITORY}/releases/download/'
@@ -87,6 +87,14 @@ class FormulaTests(unittest.TestCase):
         GENERATE.guard_current("v0.7.0", checksums(), result)
         self.assertNotIn("@SHA256_", result)
         self.assertNotIn("@TAG@", result)
+
+    def test_packaging_revision_upgrades_existing_install_and_resets_for_new_releases(self):
+        current = GENERATE.render("v0.7.0", checksums())
+        self.assertIn("  revision 1\n", current)
+        GENERATE.guard_current("v0.7.0", checksums(), current.replace("  revision 1\n", ""))
+        for tag in ("v0.6.0", "v0.7.1", "v0.8.0", "v1.0.0"):
+            with self.subTest(tag=tag):
+                self.assertNotIn("revision ", GENERATE.render(tag, checksums()))
 
     def test_template_or_hash_corruption_fails_closed(self):
         for source in (template() + "@UNKNOWN@", template().replace("@VERSION@", "0.7.0")):
