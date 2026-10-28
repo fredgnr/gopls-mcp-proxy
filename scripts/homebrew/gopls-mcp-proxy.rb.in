@@ -68,7 +68,9 @@ class GoplsMcpProxy < Formula
     assert_empty stdout
     assert_match "gopls-mcp-proxy v#{version}", stderr
 
-    input, output, process = Open3.popen2(bin/"gopls-mcp-proxy", err: (testpath/"proxy.log").to_s)
+    # Diagnostic writes must not become watched project inputs.
+    input, output, process = Open3.popen2(bin/"gopls-mcp-proxy", "--exclude", "proxy.log",
+                                        err: (testpath/"proxy.log").to_s)
     input.sync = true
     send_message = lambda do |message|
       input.puts JSON.generate(message.merge(jsonrpc: "2.0"))

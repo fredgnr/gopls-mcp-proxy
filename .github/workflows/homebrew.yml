@@ -28,7 +28,7 @@ permissions:
 
 concurrency:
   group: homebrew-${{ inputs.publish && 'publish' || github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ !inputs.publish }}
 
 jobs:
   prepare:
@@ -66,6 +66,7 @@ jobs:
         os: [macos-15, macos-15-intel, ubuntu-24.04, ubuntu-24.04-arm]
     env:
       HOMEBREW_NO_ANALYTICS: '1'
+      HOMEBREW_NO_AUTO_UPDATE: '1'
     steps:
       - uses: Homebrew/actions/setup-homebrew@d482da0e602890d3160aade42e72c8556103bf04
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
@@ -74,6 +75,11 @@ jobs:
           path: candidate
       - name: Install and exercise the candidate formula
         shell: bash
+        env:
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
         run: |
           brew tap-new fredgnr/ci
           cp candidate/gopls-mcp-proxy.rb "$(brew --repository fredgnr/ci)/Formula/gopls-mcp-proxy.rb"
