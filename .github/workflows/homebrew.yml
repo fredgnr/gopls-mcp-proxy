@@ -78,7 +78,7 @@ jobs:
     name: Homebrew (${{ matrix.os }})
     needs: prepare
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -86,6 +86,10 @@ jobs:
     env:
       HOMEBREW_NO_ANALYTICS: '1'
       HOMEBREW_NO_AUTO_UPDATE: '1'
+      # Keep dependencies between the clean-install and upgrade scenarios.
+      # Intel macOS may need to compile Go/gopls when core has no bottles.
+      HOMEBREW_NO_AUTOREMOVE: '1'
+      HOMEBREW_NO_INSTALL_CLEANUP: '1'
     steps:
       - uses: Homebrew/actions/setup-homebrew@d482da0e602890d3160aade42e72c8556103bf04
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
