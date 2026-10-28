@@ -1,0 +1,20 @@
+name: Homebrew validation
+
+on:
+  pull_request:
+    paths:
+      - scripts/homebrew/**
+      - scripts/tests/test_homebrew*.py
+      - .github/workflows/homebrew*.yml
+      - .github/workflows/release.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  homebrew:
+    uses: ./.github/workflows/homebrew.yml
+    with:
+      tag: v0.7.0
+      publish: false

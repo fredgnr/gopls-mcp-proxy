@@ -1,0 +1,111 @@
+name: Publish Homebrew
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published stable release tag (for example v0.7.0)
+        required: true
+        type: string
+      publish:
+        description: Update the tap after all installation checks pass
+        default: true
+        type: boolean
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+      publish:
+        default: true
+        type: boolean
+    secrets:
+      HOMEBREW_TAP_TOKEN:
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: homebrew-${{ inputs.publish && 'publish' || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Verify published assets
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Test release automation
+        run: python3 -B -m unittest discover -s scripts/tests -p 'test_homebrew*.py' -v
+      - name: Download and verify the published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: python3 scripts/homebrew/prepare.py --tag "$RELEASE_TAG" --output-dir homebrew-dist
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: homebrew-candidate
+          path: |
+            homebrew-dist/gopls-mcp-proxy.rb
+            homebrew-dist/checksums.txt
+          if-no-files-found: error
+          retention-days: 7
+
+  test:
+    name: Homebrew (${{ matrix.os }})
+    needs: prepare
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-15-intel, ubuntu-24.04, ubuntu-24.04-arm]
+    env:
+      HOMEBREW_NO_ANALYTICS: '1'
+    steps:
+      - uses: Homebrew/actions/setup-homebrew@d482da0e602890d3160aade42e72c8556103bf04
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: homebrew-candidate
+          path: candidate
+      - name: Install and exercise the candidate formula
+        shell: bash
+        run: |
+          brew tap-new fredgnr/ci
+          cp candidate/gopls-mcp-proxy.rb "$(brew --repository fredgnr/ci)/Formula/gopls-mcp-proxy.rb"
+          brew style fredgnr/ci/gopls-mcp-proxy
+          brew install fredgnr/ci/gopls-mcp-proxy
+          brew audit --strict fredgnr/ci/gopls-mcp-proxy
+          brew test fredgnr/ci/gopls-mcp-proxy
+          brew uninstall gopls-mcp-proxy
+          test ! -e "$(brew --prefix)/bin/gopls-mcp-proxy"
+
+  publish:
+    name: Update the stable tap
+    if: inputs.publish
+    needs: [prepare, test]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: homebrew-candidate
+          path: homebrew-dist
+      - name: Publish tested formula with rollback and concurrent-edit protection
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          if [[ -z "$GH_TOKEN" ]]; then
+            echo '::error::Add HOMEBREW_TAP_TOKEN to this repository: a fine-grained PAT for fredgnr/homebrew-tap with Contents: read/write. See docs/homebrew-release.md.'
+            exit 1
+          fi
+          python3 scripts/homebrew/publish.py --tag "$RELEASE_TAG" \
+            --formula homebrew-dist/gopls-mcp-proxy.rb --checksums homebrew-dist/checksums.txt

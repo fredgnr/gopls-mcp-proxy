@@ -15,6 +15,17 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  publish-homebrew:
+    name: Publish Homebrew tap
+    needs: publish
+    if: startsWith(github.ref_name, 'v') && !contains(github.ref_name, '-') && !contains(github.ref_name, '+')
+    uses: ./.github/workflows/homebrew.yml
+    with:
+      tag: ${{ github.ref_name }}
+      publish: true
+    secrets:
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
   checks:
     name: Validate release
     uses: ./.github/workflows/ci.yml

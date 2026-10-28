@@ -8,6 +8,49 @@
 
 ## 安装与运行
 
+### Homebrew（macOS / Linux）
+
+```sh
+brew install fredgnr/tap/gopls-mcp-proxy
+
+cd /absolute/path/to/project
+gopls-mcp-proxy
+```
+
+配方使用 GitHub Release 中的预编译代理，支持 macOS/Linux 的 arm64 和 amd64，并安装运行所需的 `gopls` 与 Go。代理本身无需在本机编译；运行 gopls 仍需要 Go 工具链。
+
+Homebrew 安装的默认后端固定使用 Homebrew 管理的 gopls。配方把代理放在私有 `libexec` 目录，在旁边建立指向 gopls 稳定 `opt` 路径的链接，避免依赖 IDE 的 PATH 来定位 gopls。公共入口保留继承的 PATH，并在末尾追加 Homebrew Go 的路径作为后备；PATH 中已有的 Go 仍优先。需要其他 gopls 或其他 MCP 后端时，使用下文的显式 `-- 程序 参数` 入口。
+
+查看适合写入 MCP 配置的稳定入口：
+
+```sh
+printf '%s/bin/gopls-mcp-proxy\n' "$(brew --prefix)"
+```
+
+例如 Apple Silicon Mac 默认安装前缀下的配置如下；其他安装前缀请替换 `command`，并把 `cwd` 改成实际项目目录：
+
+```toml
+[mcp_servers.gopls]
+command = "/opt/homebrew/bin/gopls-mcp-proxy"
+cwd = "/Users/you/projects/my-project"
+```
+
+不要在配置中写入带版本号的 `Cellar/...` 路径。从手工下载或 `go install` 迁移时，先用 `type -a gopls-mcp-proxy` 检查旧副本，再把宿主的 `command` 切换到上面的稳定入口，并保留已有代理参数。原生 gopls 配置中的裸 `args = ["mcp"]` 需要删除；显式 `-- /path/to/gopls mcp` 的参数仍保留。
+
+```sh
+# 更新配方并升级代理
+brew update
+brew upgrade fredgnr/tap/gopls-mcp-proxy
+"$(brew --prefix)/bin/gopls-mcp-proxy" --version 2>&1
+
+# 卸载代理
+brew uninstall gopls-mcp-proxy
+```
+
+升级后，让 MCP 宿主重新建立连接或重启代理进程，新启动的代理才会使用新版。卸载代理不会自动删除宿主中的 MCP 配置；不再使用时请移除对应条目。
+
+### 从源码安装
+
 代理源码要求 Go 1.25 或更新版本。代理自身不执行 `go env`，包装非 Go 后端时也不要求安装 Go；运行 gopls 时仍需满足 gopls 自身的运行要求。以下 CLI 对应此源码版本；旧 Release 不会自动获得新能力。
 
 ```sh
@@ -18,6 +61,8 @@ gopls-mcp-proxy
 ```
 
 无参数，或只有合法代理选项时，默认启动 `gopls mcp`。请保留原生 gopls，把它与代理放在同一目录最直观；代理也可以从继承的 PATH 中查找。
+
+### 命令与后端选择
 
 ```text
 gopls-mcp-proxy [代理选项]
@@ -245,7 +290,9 @@ CI 分别执行组件 race 测试、必跑 raw 协议/刷新测试、真实 gopl
 
 [GitHub Releases](https://github.com/fredgnr/gopls-mcp-proxy/releases) 的构建目标为 `darwin_arm64`、`darwin_amd64`、`linux_amd64`、`linux_arm64`。每个包包含代理、README 和 `BUILDINFO`，同时提供 `checksums.txt`。macOS 可用 `shasum -a 256`、Linux 可用 `sha256sum` 核对下载包。包内不包含 gopls。使用默认入口时将原生 gopls 保留在代理旁边，或放在 PATH 的绝对目录中；不要把代理覆盖为原生 gopls 文件。
 
-版本 tag 的发布流程先完成 CI 和四目标构建，再创建 draft、上传附件并公开；已公开版本不覆盖。普通分支和 PR 只生成保留 14 天的 `release-dist` artifact。验证和构建使用只读权限，checkout 保持 `persist-credentials: false`；只有现有 tag 发布任务具有发布权限。本次改造不自动创建 tag 或 Release。
+版本 tag 的发布流程先完成 CI 和四目标构建，再创建 draft、上传附件并公开；已公开版本不覆盖。普通分支和 PR 只生成保留 14 天的 `release-dist` artifact。验证和构建使用只读权限，checkout 保持 `persist-credentials: false`；只有现有 tag 发布任务具有主仓库的发布权限。本次改造不自动创建 tag 或 Release。
+
+稳定版 Release 发布成功后，Homebrew 工作流读取实际发布的四个安装包和校验清单，生成配方并完成四个平台的安装、MCP 冒烟测试，再更新 [fredgnr/homebrew-tap](https://github.com/fredgnr/homebrew-tap)。此跨仓库同步需要主仓库的 `HOMEBREW_TAP_TOKEN` secret；开发版、预发布版不进入稳定 tap。凭证设置、首次同步与失败重试见 [Homebrew 发布维护](docs/homebrew-release.md)。
 
 在 Linux 本地验证打包（需要空 `dist/`、Go、GNU tar、gzip、sha256sum）：
 
