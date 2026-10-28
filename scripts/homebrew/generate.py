@@ -61,28 +61,49 @@ def render(tag, checksums, template=None):
 
 def guard_current(tag, checksums, current):
     """Refuse rollback and mutation of hashes for an already published version."""
+    # Homebrew derives the version from the archive URL. Read the four URLs as
+    # one release identity instead of depending on a redundant version stanza.
+    pairs = re.findall(r'^\s*url "([^"]+)"\s*\n\s*sha256 "([0-9a-fA-F]{64})"\s*$',
+                       current, re.MULTILINE)
+    if len(pairs) != len(TARGETS) or len(re.findall(r'^\s*url\b', current, re.MULTILINE)) != len(TARGETS):
+        raise ValueError("Current formula must contain exactly four release URLs and checksums")
+    release_url = re.compile(
+        re.escape(f"https://github.com/{REPOSITORY}/releases/download/")
+        + r"(?P<tag>v[0-9]+\.[0-9]+\.[0-9]+)/gopls-mcp-proxy_(?P=tag)_"
+        + r"(?P<target>" + "|".join(TARGETS) + r")\.tar\.gz"
+    )
+    previous_checksums = {}
+    previous_tags = set()
+    for url, checksum in pairs:
+        match = release_url.fullmatch(url)
+        if not match:
+            raise ValueError("Cannot verify existing formula release URL")
+        previous_tag, target = match.group("tag", "target")
+        stable_version(previous_tag)
+        if target in previous_checksums:
+            raise ValueError("Current formula contains a duplicate release platform")
+        previous_checksums[target] = checksum.lower()
+        previous_tags.add(previous_tag)
+    if len(previous_tags) != 1 or set(previous_checksums) != set(TARGETS):
+        raise ValueError("Current formula URLs must identify the same release on all four platforms")
+    previous_tag = previous_tags.pop()
+    # Accept older generated formulas with a version stanza, but require it to
+    # agree with the assets rather than allowing it to mask a rollback.
     versions = re.findall(r'^\s*version "([^"]+)"\s*$', current, re.MULTILINE)
-    if len(versions) != 1:
-        raise ValueError("Current formula must contain one explicit stable version")
-    previous_tag = f"v{versions[0]}"
+    version_stanzas = len(re.findall(r'^\s*version\b', current, re.MULTILINE))
+    if version_stanzas > 1 or version_stanzas != len(versions):
+        raise ValueError("Current formula contains an invalid explicit version")
+    if versions and f"v{versions[0]}" != previous_tag:
+        raise ValueError("Current formula explicit version disagrees with release URLs")
     previous = stable_version(previous_tag)
     requested = stable_version(tag)
     if requested < previous:
         raise ValueError(f"Refusing Homebrew downgrade from {previous_tag} to {tag}")
     if requested != previous:
         return
-    # The generated formula uses a URL followed by its SHA for each platform.
-    pairs = re.findall(r'^\s*url "([^"]+)"\s*\n\s*sha256 "([0-9a-fA-F]{64})"\s*$',
-                       current, re.MULTILINE)
-    expected = {
-        f"https://github.com/{REPOSITORY}/releases/download/{tag}/{name}": target
-        for target, name in archive_names(tag).items()
-    }
-    if len(pairs) != len(TARGETS) or {url for url, _ in pairs} != set(expected):
-        raise ValueError("Cannot verify existing formula release URLs and checksums")
-    for url, checksum in pairs:
-        if checksum.lower() != checksums[expected[url]]:
-            raise ValueError(f"Refusing changed release checksum for {tag}: {expected[url]}")
+    for target, checksum in previous_checksums.items():
+        if checksum != checksums[target]:
+            raise ValueError(f"Refusing changed release checksum for {tag}: {target}")
 
 
 def generate(tag, manifest, output, current_formula=None):

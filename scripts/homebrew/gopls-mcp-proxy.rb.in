@@ -1,7 +1,7 @@
 class GoplsMcpProxy < Formula
   desc "Refresh MCP stdio backends when workspace inputs change"
   homepage "https://github.com/fredgnr/gopls-mcp-proxy"
-  version "@VERSION@"
+  # Generated for @VERSION@ from the published release.
 
   depends_on "go"
   depends_on "gopls"

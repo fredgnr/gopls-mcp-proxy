@@ -111,12 +111,33 @@ class FormulaTests(unittest.TestCase):
 
     def test_unknown_existing_formula_fails_closed(self):
         current = GENERATE.render("v0.7.0", checksums(), template())
-        for invalid in ("", current.replace('version "0.7.0"', ''),
+        for invalid in ("", current.replace('version "0.7.0"', 'version 0.7.0'),
                         current + 'version "0.7.0"\n',
                         current.replace("github.com/fredgnr", "example.com/fredgnr"),
                         current.replace("darwin_arm64.tar.gz", "darwin_amd64.tar.gz")):
             with self.subTest(formula=invalid), self.assertRaises(ValueError):
                 GENERATE.guard_current("v0.7.0", checksums(), invalid)
+
+    def test_url_derived_version_accepts_formulas_without_explicit_version(self):
+        current = GENERATE.render("v0.7.0", checksums(), template()).replace('  version "0.7.0"\n', '')
+        GENERATE.guard_current("v0.7.0", checksums(), current)
+        GENERATE.guard_current("v0.10.0", checksums(), current)
+        with self.assertRaisesRegex(ValueError, "downgrade"):
+            GENERATE.guard_current("v0.6.0", checksums(), current)
+
+    def test_inconsistent_url_and_explicit_versions_fail_even_for_upgrade(self):
+        current = GENERATE.render("v0.7.0", checksums(), template())
+        first_url = next(line for line in current.splitlines() if 'url "' in line)
+        malformed = [
+            current.replace('version "0.7.0"', 'version "0.6.0"'),
+            current.replace(first_url, first_url.replace("0.7.0", "0.6.0")),
+            current.replace("/download/v0.7.0/", "/download/v0.6.0/", 1),
+            current.replace("gopls-mcp-proxy_v0.7.0_", "gopls-mcp-proxy_v0.6.0_", 1),
+            current + '  url "https://example.com/other.tar.gz"\n',
+        ]
+        for invalid in malformed:
+            with self.subTest(formula=invalid), self.assertRaises(ValueError):
+                GENERATE.guard_current("v0.10.0", checksums(), invalid)
 
     def test_rejected_generation_preserves_existing_output(self):
         with tempfile.TemporaryDirectory() as directory:
