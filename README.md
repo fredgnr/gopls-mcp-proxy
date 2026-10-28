@@ -13,13 +13,16 @@
 ```sh
 brew install fredgnr/tap/gopls-mcp-proxy
 
+# 使用 gopls 后端前，请自行安装 Go 和 gopls，并配置宿主的 PATH。
 cd /absolute/path/to/project
 gopls-mcp-proxy
 ```
 
-配方使用 GitHub Release 中的预编译代理，支持 macOS/Linux 的 arm64 和 amd64，并安装运行所需的 `gopls` 与 Go。代理本身无需在本机编译；运行 gopls 仍需要 Go 工具链。
+配方仅安装 GitHub Release 中的预编译代理，支持 macOS/Linux 的 arm64 和 amd64，不声明或自动安装 Go、gopls 依赖。使用 gopls 后端时，请自行安装和配置 gopls 及其需要的 Go 工具链；包装其他 MCP 后端时，按该后端的要求准备环境。
 
-Homebrew 安装的默认后端固定使用 Homebrew 管理的 gopls。配方把代理放在私有 `libexec` 目录，在旁边建立指向 gopls 稳定 `opt` 路径的链接，避免依赖 IDE 的 PATH 来定位 gopls。公共入口保留继承的 PATH，并在末尾追加 Homebrew Go 的路径作为后备；PATH 中已有的 Go 仍优先。需要其他 gopls 或其他 MCP 后端时，使用下文的显式 `-- 程序 参数` 入口。
+配方直接安装代理二进制，不创建 gopls 链接，也不修改 PATH。默认入口先检查代理实际可执行文件同目录的 gopls，再搜索继承的 PATH。Homebrew 的公共命令路径是符号链接，其所在目录不会自动参与查找；请确保 **MCP 宿主进程**的 PATH 包含用户安装的 Go 和 gopls 所在绝对目录。GUI 启动的 IDE 可能不继承终端的 PATH，需要在宿主配置中设置。
+
+也可以使用 `-- /absolute/path/to/gopls mcp` 显式指定 gopls。显式路径只解决后端定位，gopls 所需的 Go 工具链仍需在宿主环境中可用。
 
 查看适合写入 MCP 配置的稳定入口：
 
@@ -27,7 +30,7 @@ Homebrew 安装的默认后端固定使用 Homebrew 管理的 gopls。配方把�
 printf '%s/bin/gopls-mcp-proxy\n' "$(brew --prefix)"
 ```
 
-例如 Apple Silicon Mac 默认安装前缀下的配置如下；其他安装前缀请替换 `command`，并把 `cwd` 改成实际项目目录：
+例如 Apple Silicon Mac 默认安装前缀下的配置如下；其他安装前缀请替换 `command`，并把 `cwd` 改成实际项目目录。此示例要求宿主已配置好 Go 和 gopls 的 PATH：
 
 ```toml
 [mcp_servers.gopls]
@@ -47,7 +50,7 @@ brew upgrade fredgnr/tap/gopls-mcp-proxy
 brew uninstall gopls-mcp-proxy
 ```
 
-升级后，让 MCP 宿主重新建立连接或重启代理进程，新启动的代理才会使用新版。卸载代理不会自动删除宿主中的 MCP 配置；不再使用时请移除对应条目。
+升级后，让 MCP 宿主重新建立连接或重启代理进程，新启动的代理才会使用新版。已安装早期 Homebrew `v0.7.0` 配方的用户，也通过上述命令升级到 `0.7.0_1` 包修订，移除旧入口对 Homebrew Go/gopls 的绑定；代理程序版本仍显示 `v0.7.0`。升级前请先确认宿主的工具路径配置。卸载代理不会自动删除宿主中的 MCP 配置；不再使用时请移除对应条目。
 
 ### 从源码安装
 

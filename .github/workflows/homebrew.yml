@@ -47,6 +47,7 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
           python3 scripts/homebrew/prepare.py --tag "$RELEASE_TAG" --output-dir homebrew-dist
+          cp scripts/homebrew/smoke.py homebrew-dist/smoke.py
           python3 - <<'PY'
           import os
           from pathlib import Path
@@ -71,6 +72,7 @@ jobs:
             homebrew-dist/gopls-mcp-proxy.rb
             homebrew-dist/gopls-mcp-proxy-baseline.rb
             homebrew-dist/checksums.txt
+            homebrew-dist/smoke.py
           if-no-files-found: error
           retention-days: 7
 
@@ -86,9 +88,6 @@ jobs:
     env:
       HOMEBREW_NO_ANALYTICS: '1'
       HOMEBREW_NO_AUTO_UPDATE: '1'
-      # Keep dependencies between the clean-install and upgrade scenarios.
-      # Intel macOS may need to compile Go/gopls when core has no bottles.
-      HOMEBREW_NO_AUTOREMOVE: '1'
       HOMEBREW_NO_INSTALL_CLEANUP: '1'
     steps:
       - uses: Homebrew/actions/setup-homebrew@d482da0e602890d3160aade42e72c8556103bf04
@@ -96,7 +95,7 @@ jobs:
         with:
           name: homebrew-candidate
           path: candidate
-      - name: Install and exercise the candidate formula
+      - name: Install and test without formula dependencies
         shell: bash
         run: |
           git config --global user.name 'github-actions[bot]'
@@ -104,11 +103,31 @@ jobs:
           brew tap-new fredgnr/ci
           cp candidate/gopls-mcp-proxy.rb "$(brew --repository fredgnr/ci)/Formula/gopls-mcp-proxy.rb"
           brew style fredgnr/ci/gopls-mcp-proxy
+          test -z "$(brew deps --include-build --include-test fredgnr/ci/gopls-mcp-proxy)"
+          brew list --formula | sort > "$RUNNER_TEMP/formulas-before.txt"
           brew install fredgnr/ci/gopls-mcp-proxy
+          brew list --formula | sed '/^gopls-mcp-proxy$/d' | sort > "$RUNNER_TEMP/formulas-after.txt"
+          diff -u "$RUNNER_TEMP/formulas-before.txt" "$RUNNER_TEMP/formulas-after.txt"
           brew audit --strict fredgnr/ci/gopls-mcp-proxy
           brew test fredgnr/ci/gopls-mcp-proxy
-          brew uninstall gopls-mcp-proxy
+      - name: Set up user-managed Go for integration tests only
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.27.2'
+          cache: false
+      - name: Install user-managed gopls for integration tests only
+        env:
+          GOBIN: ${{ runner.temp }}/gopls-bin
+          GOTOOLCHAIN: local
+        run: go install golang.org/x/tools/gopls@v0.24.0
+      - name: Exercise user-configured PATH and explicit backend, then uninstall
+        shell: bash
+        run: |
+          python3 candidate/smoke.py --proxy "$(brew --prefix)/bin/gopls-mcp-proxy" \
+            --gopls "$RUNNER_TEMP/gopls-bin/gopls" --go "$(command -v go)"
+          brew uninstall --force gopls-mcp-proxy
           test ! -e "$(brew --prefix)/bin/gopls-mcp-proxy"
+          test ! -L "$(brew --prefix)/bin/gopls-mcp-proxy"
       - name: Upgrade the installed baseline through the stable command path
         shell: bash
         env:
@@ -130,9 +149,27 @@ jobs:
           expected_prefix="gopls-mcp-proxy $RELEASE_TAG (commit "
           [[ "$candidate_version" == "$expected_prefix"* ]]
           brew test fredgnr/ci/gopls-mcp-proxy
-          brew uninstall gopls-mcp-proxy
+          python3 candidate/smoke.py --proxy "$stable_command" \
+            --gopls "$RUNNER_TEMP/gopls-bin/gopls" --go "$(command -v go)"
+          brew uninstall --force gopls-mcp-proxy
           test ! -e "$stable_command"
           test ! -L "$stable_command"
+      - name: Verify same-version packaging revision upgrade
+        if: inputs.tag == 'v0.7.0'
+        shell: bash
+        run: |
+          formula="$(brew --repository fredgnr/ci)/Formula/gopls-mcp-proxy.rb"
+          # Exercise Homebrew's revision upgrade without changing release assets.
+          sed '/^  revision 1$/d' candidate/gopls-mcp-proxy.rb > "$formula"
+          brew install fredgnr/ci/gopls-mcp-proxy
+          [[ "$(readlink "$(brew --prefix)/opt/gopls-mcp-proxy")" == */0.7.0 ]]
+          cp candidate/gopls-mcp-proxy.rb "$formula"
+          brew upgrade fredgnr/ci/gopls-mcp-proxy
+          [[ "$(readlink "$(brew --prefix)/opt/gopls-mcp-proxy")" == */0.7.0_1 ]]
+          brew test fredgnr/ci/gopls-mcp-proxy
+          brew uninstall --force gopls-mcp-proxy
+          test ! -e "$(brew --prefix)/bin/gopls-mcp-proxy"
+          test ! -L "$(brew --prefix)/bin/gopls-mcp-proxy"
 
   publish:
     name: Update the stable tap

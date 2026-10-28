@@ -1,6 +1,6 @@
 # Homebrew 发布维护
 
-`fredgnr/homebrew-tap` 中的 `Formula/gopls-mcp-proxy.rb` 安装主仓库已发布的二进制。用户通过 `brew install fredgnr/tap/gopls-mcp-proxy` 安装，通过 `brew update` 和 `brew upgrade fredgnr/tap/gopls-mcp-proxy` 获取新版。
+`fredgnr/homebrew-tap` 中的 `Formula/gopls-mcp-proxy.rb` 仅安装主仓库已发布的代理二进制，不声明 Go 或 gopls 依赖，不创建 gopls 链接，也不修改 PATH。用户自行安装和配置后端及其工具链，通过 `brew install fredgnr/tap/gopls-mcp-proxy` 安装代理，通过 `brew update` 和 `brew upgrade fredgnr/tap/gopls-mcp-proxy` 获取新版。
 
 ## 一次性凭证配置
 
@@ -25,12 +25,10 @@ tap 的默认分支使用 `main`。如果以后为该分支增加必须通过 PR
 
 1. 下载对应 Release 中四个目标平台的压缩包和 `checksums.txt`，确认附件齐全并验证实际内容的 SHA-256。候选版本高于 `v0.6.0` 时，同样下载并验证该固定升级基线的四个平台附件。
 2. 使用主仓库的 `scripts/homebrew/gopls-mcp-proxy.rb.in` 生成候选配方，下载地址始终指向具体版本。
-3. 在 macOS arm64、macOS amd64、Linux amd64 和 Linux arm64 runner 上检查配方、安装并执行 MCP 冒烟测试。测试覆盖代理版本输出、默认 gopls 后端、初始化、非空工具列表和连接关闭；精简 PATH 用于验证安装入口对依赖的定位。干净安装验证并卸载后，再安装 `v0.6.0` 基线、将测试 tap 更新到候选配方并执行真正的 `brew upgrade`，确认相同稳定命令路径报告候选版本，重跑 MCP 冒烟测试并卸载。候选版本不高于基线时，只验证干净安装。
+3. 在 macOS arm64、macOS amd64、Linux amd64 和 Linux arm64 runner 上检查配方、安装并执行测试，确认配方没有依赖，安装代理不会安装 Go/gopls。配方内置测试无需 Go/gopls；CI 另行准备 Go 和 gopls，模拟用户环境执行真实 MCP 冒烟测试，覆盖 PATH 中的默认后端、显式后端路径、初始化、非空工具列表和连接关闭。干净安装验证并卸载后，再安装 `v0.6.0` 基线、将测试 tap 更新到候选配方并执行真正的 `brew upgrade`，确认相同稳定命令路径报告候选版本，重跑 MCP 冒烟测试并卸载。候选版本不高于基线时，只验证干净安装。
 4. 全部验证通过后，使用 `HOMEBREW_TAP_TOKEN` 更新 tap 中的配方。同步前再次读取当前配方版本；旧版本不能覆盖新版，同一版本的发布校验值不能被更换。提交时携带读取到的文件 blob SHA，由 GitHub Contents API 进行有条件的原子更新。如果期间有人修改了该配方，提交失败，必须检查并重试，不会覆盖并发变更。没有内容变化时不创建重复提交。
 
-macOS/Linux 的原生运行检查验证发布包能够在对应架构上运行；它们不代替用户在实际 IDE、实际项目和现有 MCP 配置中的验收。包内仍不包含 gopls，配方声明 `gopls` 与 Go 运行依赖，主仓库原有真实后端互通测试继续独立执行。
-
-Intel macOS 上如果 Homebrew 没有提供 Go/gopls 的预编译包，安装这些依赖会从源码构建，耗时更长；代理本身仍使用 Release 二进制。升级测试在卸载代理后保留依赖，避免同一 job 重复编译 Go/gopls。普通用户的卸载操作仍遵循 Homebrew 自身的依赖清理策略。
+macOS/Linux 的原生运行检查验证发布包能够在对应架构上运行；它们不代替用户在实际 IDE、实际项目和现有 MCP 配置中的验收。CI 准备的 Go/gopls 仅用于测试，不进入配方的安装依赖；主仓库原有真实后端互通测试继续独立执行。
 
 ## 首次同步与重试
 
@@ -54,7 +52,7 @@ brew test fredgnr/tap/gopls-mcp-proxy
 "$(brew --prefix)/bin/gopls-mcp-proxy" --version 2>&1
 ```
 
-`--version` 写入 stderr，因此示例使用 `2>&1`。配方测试包含真实 MCP 交互，不能仅以版本号或帮助输出通过作为功能验收。
+`--version` 写入 stderr，因此示例使用 `2>&1`。以上命令不要求预先安装 Go 或 gopls。`brew test` 验证代理自身的安装和启动行为；真实 MCP 功能由 CI 中单独准备后端的冒烟测试验证。用户还需配置宿主进程的 PATH，使 gopls 及其 Go 工具链可用；也可显式指定 `-- /absolute/path/to/gopls mcp`，同时保留 Go 的环境配置。
 
 Homebrew 工作流在四个平台执行 `v0.6.0 → 候选版本` 的安装与升级验证；首次候选 `v0.7.0` 对应真实的 `v0.6.0 → v0.7.0` 升级。该测试使用同一套配方生成和附件校验流程，并检查升级前后的稳定命令入口及升级后的 MCP 交互。
 
@@ -67,6 +65,8 @@ brew upgrade fredgnr/tap/gopls-mcp-proxy
 ```
 
 确认版本已改变、MCP 配置仍指向稳定的 `$(brew --prefix)/bin/gopls-mcp-proxy`，再重新建立 MCP 连接，验证实际项目可初始化并列出工具。配置文件中的路径需填写命令展开后的绝对路径；TOML/JSON 不会自动执行 `$(brew --prefix)`。CI 的基线升级测试不代表未来一次真实发版事件、跨仓库凭证、用户端 `brew update` 和实际 MCP 宿主重连这一整条流程已经验收。
+
+移除 Go/gopls 安装依赖的包装修正为 `v0.7.0` 增加 `revision 1`，Homebrew 显示为 `0.7.0_1`。现有用户执行同样的 `brew update` / `brew upgrade` 即可替换旧包装；发布二进制和校验值保持不变，`--version` 仍显示 `v0.7.0`。新包装继承宿主环境，升级前应配置好自行管理的 Go/gopls 路径。
 
 ## 修改配方
 

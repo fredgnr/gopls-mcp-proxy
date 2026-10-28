@@ -11,6 +11,9 @@ TARGETS = ("darwin_arm64", "darwin_amd64", "linux_arm64", "linux_amd64")
 STABLE_TAG = re.compile(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
 CHECKSUM = re.compile(r"([0-9a-fA-F]{64}) [ *](\S+)")
 TEMPLATE = Path(__file__).with_name("gopls-mcp-proxy.rb.in")
+# Reinstall the original v0.7.0 package without its former managed toolchain.
+# New upstream versions start at Homebrew's default revision of zero.
+PACKAGING_REVISIONS = {"v0.7.0": 1}
 
 
 def stable_version(tag):
@@ -52,10 +55,14 @@ def render(tag, checksums, template=None):
     source = TEMPLATE.read_text(encoding="utf-8") if template is None else template
     values = {"VERSION": tag[1:], "TAG": tag}
     values.update({f"SHA256_{target.upper()}": checksum for target, checksum in checksums.items()})
-    required = {"VERSION", "TAG", *(f"SHA256_{target.upper()}" for target in TARGETS)}
+    required = {"VERSION", "TAG", "REVISION", *(f"SHA256_{target.upper()}" for target in TARGETS)}
     seen = set(re.findall(r"@([A-Z0-9_]+)@", source))
     if seen != required:
         raise ValueError("Formula template has missing or unknown placeholders")
+    revision = PACKAGING_REVISIONS.get(tag, 0)
+    if len(re.findall(r"^@REVISION@$", source, re.MULTILINE)) != 1 or source.count("@REVISION@") != 1:
+        raise ValueError("Formula template must have one standalone revision placeholder")
+    source = source.replace("@REVISION@\n", f"  revision {revision}\n" if revision else "")
     return re.sub(r"@([A-Z0-9_]+)@", lambda match: values[match.group(1)], source)
 
 
