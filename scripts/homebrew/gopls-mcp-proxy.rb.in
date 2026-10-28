@@ -52,7 +52,7 @@ class GoplsMcpProxy < Formula
       stdout, stderr, status = Open3.capture3(bin/"gopls-mcp-proxy", argument)
       assert_predicate status, :success?
       assert_empty stdout
-      expected = argument == "--version" ? "gopls-mcp-proxy v#{version}" : "Usage: gopls-mcp-proxy"
+      expected = (argument == "--version") ? "gopls-mcp-proxy v#{version}" : "Usage: gopls-mcp-proxy"
       assert_match expected, stderr
     end
 
