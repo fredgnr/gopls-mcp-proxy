@@ -41,16 +41,35 @@ jobs:
           persist-credentials: false
       - name: Test release automation
         run: python3 -B -m unittest discover -s scripts/tests -p 'test_homebrew*.py' -v
-      - name: Download and verify the published release
+      - name: Download and verify the published release and upgrade baseline
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag }}
-        run: python3 scripts/homebrew/prepare.py --tag "$RELEASE_TAG" --output-dir homebrew-dist
+        run: |
+          python3 scripts/homebrew/prepare.py --tag "$RELEASE_TAG" --output-dir homebrew-dist
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          import shutil
+          import sys
+
+          sys.path.insert(0, "scripts/homebrew")
+          from generate import stable_version
+          from prepare import prepare
+
+          baseline = "v0.6.0"
+          if stable_version(os.environ["RELEASE_TAG"]) > stable_version(baseline):
+              formula = prepare(baseline, Path("homebrew-baseline"))
+              shutil.copyfile(formula, "homebrew-dist/gopls-mcp-proxy-baseline.rb")
+          else:
+              print(f"Skipping upgrade test: candidate does not follow {baseline}")
+          PY
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: homebrew-candidate
           path: |
             homebrew-dist/gopls-mcp-proxy.rb
+            homebrew-dist/gopls-mcp-proxy-baseline.rb
             homebrew-dist/checksums.txt
           if-no-files-found: error
           retention-days: 7
@@ -75,12 +94,9 @@ jobs:
           path: candidate
       - name: Install and exercise the candidate formula
         shell: bash
-        env:
-          GIT_AUTHOR_NAME: github-actions[bot]
-          GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
-          GIT_COMMITTER_NAME: github-actions[bot]
-          GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
         run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email '41898282+github-actions[bot]@users.noreply.github.com'
           brew tap-new fredgnr/ci
           cp candidate/gopls-mcp-proxy.rb "$(brew --repository fredgnr/ci)/Formula/gopls-mcp-proxy.rb"
           brew style fredgnr/ci/gopls-mcp-proxy
@@ -89,6 +105,30 @@ jobs:
           brew test fredgnr/ci/gopls-mcp-proxy
           brew uninstall gopls-mcp-proxy
           test ! -e "$(brew --prefix)/bin/gopls-mcp-proxy"
+      - name: Upgrade the installed baseline through the stable command path
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          if [[ ! -f candidate/gopls-mcp-proxy-baseline.rb ]]; then
+            echo 'Candidate is not newer than the v0.6.0 upgrade baseline; clean installation was tested.'
+            exit 0
+          fi
+          formula="$(brew --repository fredgnr/ci)/Formula/gopls-mcp-proxy.rb"
+          stable_command="$(brew --prefix)/bin/gopls-mcp-proxy"
+          cp candidate/gopls-mcp-proxy-baseline.rb "$formula"
+          brew install fredgnr/ci/gopls-mcp-proxy
+          baseline_version="$("$stable_command" --version 2>&1)"
+          [[ "$baseline_version" == 'gopls-mcp-proxy v0.6.0 (commit '* ]]
+          cp candidate/gopls-mcp-proxy.rb "$formula"
+          brew upgrade fredgnr/ci/gopls-mcp-proxy
+          candidate_version="$("$stable_command" --version 2>&1)"
+          expected_prefix="gopls-mcp-proxy $RELEASE_TAG (commit "
+          [[ "$candidate_version" == "$expected_prefix"* ]]
+          brew test fredgnr/ci/gopls-mcp-proxy
+          brew uninstall gopls-mcp-proxy
+          test ! -e "$stable_command"
+          test ! -L "$stable_command"
 
   publish:
     name: Update the stable tap

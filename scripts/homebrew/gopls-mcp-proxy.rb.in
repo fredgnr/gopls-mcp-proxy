@@ -3,6 +3,9 @@ class GoplsMcpProxy < Formula
   homepage "https://github.com/fredgnr/gopls-mcp-proxy"
   version "@VERSION@"
 
+  depends_on "go"
+  depends_on "gopls"
+
   on_macos do
     on_arm do
       url "https://github.com/fredgnr/gopls-mcp-proxy/releases/download/@TAG@/gopls-mcp-proxy_@TAG@_darwin_arm64.tar.gz"
@@ -25,17 +28,14 @@ class GoplsMcpProxy < Formula
     end
   end
 
-  depends_on "go"
-  depends_on "gopls"
-
   def install
     libexec.install "gopls-mcp-proxy"
     # Default discovery follows the physical proxy path, so keep a private
     # sibling pointing at the dependency's stable opt path across upgrades.
-    libexec.install_symlink Formula["gopls"].opt_bin/"gopls"
+    libexec.install_symlink formula_opt_bin("gopls")/"gopls"
     # Preserve an explicitly selected Go toolchain, with a fallback for GUI hosts.
     (bin/"gopls-mcp-proxy").write_env_script libexec/"gopls-mcp-proxy",
-                                          PATH: "$PATH:#{Formula["go"].opt_bin}"
+                                          PATH: "$PATH:#{formula_opt_bin("go")}"
     doc.install "README.md", "BUILDINFO"
   end
 
@@ -98,8 +98,8 @@ class GoplsMcpProxy < Formula
       Timeout.timeout(60) do
         send_message.call(id: 1, method: "initialize", params: {
           protocolVersion: "2025-11-25",
-          clientInfo: { name: "homebrew-smoke", version: "1" },
-          capabilities: { roots: { listChanged: false } },
+          clientInfo:      { name: "homebrew-smoke", version: "1" },
+          capabilities:    { roots: { listChanged: false } },
         })
         initialization = receive_result.call(1)
         assert_match "gopls", initialization.fetch("serverInfo").fetch("name")
