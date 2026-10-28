@@ -60,16 +60,19 @@ class GoplsMcpProxy < Formula
     ENV["GOTOOLCHAIN"] = "local"
     ENV["GOPROXY"] = "off"
     ENV["GOSUMDB"] = "off"
-    (testpath/"go.mod").write "module example.com/homebrew-smoke\n\ngo 1.25.0\n"
-    (testpath/"main.go").write "package main\n\nfunc main() {}\n"
+    # Homebrew sets HOME=testpath; the proxy deliberately refuses to watch HOME.
+    workspace = testpath/"workspace"
+    workspace.mkpath
+    (workspace/"go.mod").write "module example.com/homebrew-smoke\n\ngo 1.25.0\n"
+    (workspace/"main.go").write "package main\n\nfunc main() {}\n"
 
     stdout, stderr, status = Open3.capture3(bin/"gopls-mcp-proxy", "--version")
     assert_predicate status, :success?
     assert_empty stdout
     assert_match "gopls-mcp-proxy v#{version}", stderr
 
-    # Diagnostic writes must not become watched project inputs.
-    input, output, process = Open3.popen2(bin/"gopls-mcp-proxy", "--exclude", "proxy.log",
+    # Keep diagnostics outside the watched project inputs.
+    input, output, process = Open3.popen2(bin/"gopls-mcp-proxy", chdir: workspace,
                                         err: (testpath/"proxy.log").to_s)
     input.sync = true
     send_message = lambda do |message|
@@ -83,7 +86,7 @@ class GoplsMcpProxy < Formula
         message = JSON.parse(line)
         if message["method"] == "roots/list" && message.key?("id")
           send_message.call(id: message["id"], result: {
-            roots: [{ uri: "file://#{testpath.realpath}", name: "homebrew-smoke" }],
+            roots: [{ uri: "file://#{workspace.realpath}", name: "homebrew-smoke" }],
           })
         elsif message.key?("method") && message.key?("id")
           send_message.call(id: message["id"], error: { code: -32601, message: "Method not found" })
