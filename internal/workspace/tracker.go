@@ -41,6 +41,7 @@ type Snapshot struct {
 	GoFiles           []string // Informational only; no special fingerprint rules.
 	DiscoveryDegraded bool
 	watchDirectories  []string
+	inputDirectories  []string // Directories with included descendants at the last scan.
 	rootScopes        []rootScope
 }
 
@@ -205,6 +206,7 @@ func cloneSnapshot(s Snapshot) Snapshot {
 	s.Dependencies = slices.Clone(s.Dependencies)
 	s.GoFiles = slices.Clone(s.GoFiles)
 	s.watchDirectories = slices.Clone(s.watchDirectories)
+	s.inputDirectories = slices.Clone(s.inputDirectories)
 	s.rootScopes = slices.Clone(s.rootScopes)
 	return s
 }
@@ -296,7 +298,7 @@ func (t *Tracker) scan(ctx context.Context) (Snapshot, []string, []string, error
 	}
 	field(h, []byte(fmt.Sprint(t.cfg.GoDiscovery)))
 	field(h, []byte(t.cfg.WorkFile))
-	dirs, watchDirs, goFiles := map[string]bool{}, map[string]bool{}, map[string]bool{}
+	dirs, watchDirs, inputDirs, goFiles := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
 	buffer := make([]byte, 64*1024)
 	rootTargets := map[string]bool{}
 	var scopes []rootScope
@@ -355,12 +357,18 @@ func (t *Tracker) scan(ctx context.Context) (Snapshot, []string, []string, error
 				return nil
 			}
 			if d.IsDir() {
+				// Retain the type even for a pruned directory, so its removal
+				// cannot be mistaken for a matching filename (e.g. empty.go).
+				dirs[path] = true
+				if !t.includesDescendant(rel) {
+					return filepath.SkipDir
+				}
 				stat, err := d.Info()
 				if err != nil {
 					return err
 				}
 				beforeDirs[path] = stat
-				dirs[path], watchDirs[path] = true, true
+				watchDirs[path] = true
 				return nil
 			}
 			if !t.included(rel) {
@@ -369,6 +377,11 @@ func (t *Tracker) scan(ctx context.Context) (Snapshot, []string, []string, error
 			field(h, []byte(rel))
 			if err := hashEntry(ctx, h, path, false, buffer, nil); err != nil {
 				return err
+			}
+			if len(t.cfg.Include) != 0 && info.IsDir() {
+				for dir := filepath.Dir(path); within(dir, target); dir = filepath.Dir(dir) {
+					inputDirs[dir] = true
+				}
 			}
 			if strings.HasSuffix(path, ".go") {
 				goFiles[path] = true
@@ -418,7 +431,7 @@ func (t *Tracker) scan(ctx context.Context) (Snapshot, []string, []string, error
 	}
 	var digest Fingerprint
 	copy(digest[:], h.Sum(nil))
-	return Snapshot{Fingerprint: digest, Roots: keys(rootTargets), Directories: keys(dirs), Dependencies: dependencies, GoFiles: keys(goFiles), DiscoveryDegraded: degraded, watchDirectories: keys(watchDirs), rootScopes: scopes}, discovered, dependencies, nil
+	return Snapshot{Fingerprint: digest, Roots: keys(rootTargets), Directories: keys(dirs), Dependencies: dependencies, GoFiles: keys(goFiles), DiscoveryDegraded: degraded, watchDirectories: keys(watchDirs), inputDirectories: keys(inputDirs), rootScopes: scopes}, discovered, dependencies, nil
 }
 
 type contextReader struct {
@@ -600,10 +613,16 @@ func (t *Tracker) Watch(ctx context.Context, mark func(string)) {
 }
 
 func (t *Tracker) observe(event fsnotify.Event, mark func(string)) {
-	if !t.relevant(event) {
+	relevant, input := t.eventScope(event)
+	if !relevant {
 		return
 	}
-	if event.Has(fsnotify.Write) || event.Has(fsnotify.Create) || event.Has(fsnotify.Remove) || event.Has(fsnotify.Rename) {
+	if !input {
+		// New directories may contain included files before recursive watches
+		// are registered. Rescan to discover them, without invalidating for
+		// empty directories or unrelated files alone.
+		mark("filesystem_structure")
+	} else if event.Has(fsnotify.Write) || event.Has(fsnotify.Create) || event.Has(fsnotify.Remove) || event.Has(fsnotify.Rename) {
 		t.epoch.Add(1)
 		mark("filesystem_event")
 	} else {
@@ -612,17 +631,37 @@ func (t *Tracker) observe(event fsnotify.Event, mark func(string)) {
 }
 
 func (t *Tracker) relevant(event fsnotify.Event) bool {
+	relevant, _ := t.eventScope(event)
+	return relevant
+}
+
+// eventScope separates input invalidations from directory discovery hints.
+// Removed paths need the previous snapshot: Lstat cannot identify them anymore.
+func (t *Tracker) eventScope(event fsnotify.Event) (relevant, input bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	name := filepath.Clean(event.Name)
 	if slices.Contains(t.latest.Dependencies, name) {
-		return true
+		return true, true
 	}
 	for _, scope := range t.latest.rootScopes {
 		// Ancestor events matter only for the configured path itself, not for
 		// arbitrary siblings encountered by a parent directory watch.
 		if within(scope.locator, name) {
-			return true
+			if len(t.cfg.Include) == 0 {
+				return true, true
+			}
+			if scope.file && t.included(filepath.Base(scope.target)) && !t.excluded(scope.target, filepath.Base(scope.target)) {
+				if name == scope.locator || event.Has(fsnotify.Remove) || event.Has(fsnotify.Rename) {
+					return true, true
+				}
+			}
+			if (event.Has(fsnotify.Remove) || event.Has(fsnotify.Rename)) && slices.Contains(t.latest.inputDirectories, scope.target) {
+				return true, true
+			}
+			relevant = true
+			// An overlapping root may treat this locator as a regular input.
+			continue
 		}
 		if !within(name, scope.target) || (scope.file && name != scope.target) {
 			continue
@@ -635,17 +674,33 @@ func (t *Tracker) relevant(event fsnotify.Event) bool {
 		if t.excluded(name, rel) {
 			continue
 		}
-		if slices.Contains(t.latest.Directories, name) {
-			return true
-		}
-		if info, err := os.Lstat(name); err == nil && info.IsDir() {
-			return true
+		info, err := os.Lstat(name)
+		if slices.Contains(t.latest.Directories, name) || (err == nil && info.IsDir()) {
+			if len(t.cfg.Include) == 0 {
+				return true, true
+			}
+			if (event.Has(fsnotify.Remove) || event.Has(fsnotify.Rename)) && slices.Contains(t.latest.inputDirectories, name) {
+				return true, true
+			}
+			// A file replacing a directory is itself an input when it matches.
+			if err == nil && !info.IsDir() && t.included(rel) {
+				return true, true
+			}
+			if t.includesDescendant(rel) {
+				relevant = true
+			}
+			continue
 		}
 		if t.included(rel) {
-			return true
+			return true, true
+		}
+		if errors.Is(err, fs.ErrNotExist) && t.includesDescendant(rel) {
+			// A newly created directory may already have moved/disappeared
+			// before its event is consumed. Discover its final location.
+			relevant = true
 		}
 	}
-	return false
+	return relevant, false
 }
 
 func (t *Tracker) syncWatchesLocked(s Snapshot) bool {

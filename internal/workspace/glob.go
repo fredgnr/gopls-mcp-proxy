@@ -13,7 +13,8 @@ import (
 // A standalone '**' segment matches zero or more
 // complete segments. A pattern without '/' matches a basename at any depth.
 // Patterns containing a slash are anchored at the monitored root. Directory
-// exclusion prunes descendants. Include never prunes directories. Exclusion
+// exclusion prunes descendants. Include keeps directories that can contain a
+// matching descendant, even when that descendant does not exist yet. Exclusion
 // wins, and VCS directories .git/.hg/.svn are always excluded. Absolute paths,
 // backslash escapes, empty segments, '.', '..', and '!' negation are rejected.
 func validateGlob(pattern string) error {
@@ -38,8 +39,15 @@ func validateGlob(pattern string) error {
 }
 
 func globMatch(pattern, name string) bool {
+	return globMatchPath(pattern, name, false)
+}
+
+// globMatchPath can also match a directory prefix with at least one remaining
+// path segment. This uses the same glob semantics as file matching, so pruning
+// cannot hide future matching files under currently empty directories.
+func globMatchPath(pattern, name string, descendant bool) bool {
 	if !strings.Contains(pattern, "/") {
-		if pattern == "**" {
+		if descendant || pattern == "**" {
 			return true
 		}
 		matched, _ := path.Match(pattern, path.Base(name))
@@ -51,6 +59,9 @@ func globMatch(pattern, name string) bool {
 	matched := make([]bool, len(names)+1)
 	matched[0] = true
 	for _, part := range parts {
+		if descendant && matched[len(names)] {
+			return true
+		}
 		next := make([]bool, len(names)+1)
 		if part == "**" {
 			next[0] = matched[0]
@@ -64,8 +75,11 @@ func globMatch(pattern, name string) bool {
 			}
 		}
 		matched = next
+		if descendant && part == "**" && matched[len(names)] {
+			return true
+		}
 	}
-	return matched[len(names)]
+	return !descendant && matched[len(names)]
 }
 
 func (t *Tracker) excluded(absolute, relative string) bool {
@@ -97,6 +111,18 @@ func (t *Tracker) included(relative string) bool {
 	}
 	for _, pattern := range t.cfg.Include {
 		if globMatch(pattern, filepath.ToSlash(relative)) {
+			return true
+		}
+	}
+	return false
+}
+
+func (t *Tracker) includesDescendant(relative string) bool {
+	if len(t.cfg.Include) == 0 || relative == "." {
+		return true
+	}
+	for _, pattern := range t.cfg.Include {
+		if globMatchPath(pattern, filepath.ToSlash(relative), true) {
 			return true
 		}
 	}

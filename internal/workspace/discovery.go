@@ -19,6 +19,31 @@ type discoveryObservation struct {
 	linkTarget *string
 }
 
+// Discovery must not silently expand a whitelist. Metadata inside an explicit
+// root uses that root's relative path; ancestor/external metadata is a file
+// input and uses its basename, like an explicit file watch root.
+func (t *Tracker) discoverySelected(name string) bool {
+	if len(t.cfg.Include) == 0 {
+		return true // Preserve the existing unfiltered discovery contract.
+	}
+	inRoot := false
+	for _, root := range t.explicitRoots() {
+		if !within(name, root) {
+			continue
+		}
+		inRoot = true
+		rel, _ := filepath.Rel(root, name)
+		if rel == "." {
+			rel = filepath.Base(name)
+		}
+		rel = filepath.ToSlash(rel)
+		if t.included(rel) && !t.excluded(name, rel) {
+			return true
+		}
+	}
+	return !inRoot && t.included(filepath.Base(name)) && !t.excluded(name, filepath.Base(name))
+}
+
 func (t *Tracker) observeDiscoveryPath(p string) (bool, error) {
 	info, err := os.Lstat(p)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -53,10 +78,16 @@ func (t *Tracker) discover(ctx context.Context) ([]string, []string, bool, error
 		if err := ctx.Err(); err != nil {
 			return false, err
 		}
+		if !t.discoverySelected(p) {
+			return false, nil
+		}
 		dependencies[p] = true
 		return t.observeDiscoveryPath(p)
 	}
 	work, foundMod := t.cfg.WorkFile, false
+	if work != "" && work != "off" && !t.discoverySelected(work) {
+		work = "off"
+	}
 	for dir := t.cfg.Workspace; ; dir = filepath.Dir(dir) {
 		if !foundMod {
 			present, err := exists(filepath.Join(dir, "go.mod"))
@@ -65,7 +96,9 @@ func (t *Tracker) discover(ctx context.Context) ([]string, []string, bool, error
 			}
 			if present {
 				roots[dir], foundMod = true, true
-				dependencies[filepath.Join(dir, "go.sum")] = true
+				if sum := filepath.Join(dir, "go.sum"); t.discoverySelected(sum) {
+					dependencies[sum] = true
+				}
 			}
 		}
 		if work == "" {
@@ -84,7 +117,10 @@ func (t *Tracker) discover(ctx context.Context) ([]string, []string, bool, error
 	}
 	var discoveryErr error
 	if work != "" && work != "off" {
-		dependencies[work], dependencies[work+".sum"] = true, true
+		dependencies[work] = true
+		if t.discoverySelected(work + ".sum") {
+			dependencies[work+".sum"] = true
+		}
 		if _, err := t.observeDiscoveryPath(work); err != nil {
 			return nil, nil, false, err
 		}

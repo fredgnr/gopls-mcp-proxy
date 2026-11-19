@@ -20,6 +20,8 @@
 | 真实 gopls 每次工具调用换代及新增/重命名/修改/删除 | `TestRealGoplsPerCallFreshProcessAndFileChanges` |
 | raw JSON、typed ID、数字精度、扩展字段、null、短读短写、大帧与 batch | `internal/wire/wire_test.go`、`TestRawProxyPayloadIdentity`、`TestRawProxyLegacyBatch` |
 | 常规输入内容、同长度同 mtime 修改、范围/glob/符号链接 | `internal/workspace/content_test.go`、`tracker_test.go` |
+| `--include` 白名单、目录前缀裁剪、空范围、新目录、重命名/增删改、额外根与 Go 发现过滤 | `internal/workspace/include_test.go` |
+| 白名单内变化重建、无关变化不重建、watcher/轮询/请求检查三条路径 | `TestRawProxyIncludeWhitelist`（`integration/include_test.go`） |
 | 写入后恢复原值、事件 epoch、事件丢失、扫描竞态/取消/读取错误 | workspace 内容测试、`TestRawProxyIdlePollRefresh`、`TestRawProxyWatcherSameContentInvalidates` |
 | 五修订基本重复刷新与连接保持 | `TestRawProxyRefreshEachRevision` |
 | 双向 roots、内部初始化隔离、legacy 日志与资源订阅恢复 | `TestRawProxyReverseRootsAcrossRefresh`、`TestRawProxyConfirmedLegacyStateRecovery`、`internal/proxy/recovery_test.go` |
@@ -56,6 +58,9 @@ go build ./cmd/gopls-mcp-proxy
 
 # 单独执行独立刷新与协议用例。
 go test -race -v ./integration -run '^TestRaw' -count=1
+
+# 只执行白名单监听回归（含实际代理子进程）。
+go test -race ./internal/workspace ./integration -run 'Test(Include|RawProxyInclude)' -count=1
 
 # 真实互通；需要支持 MCP 的 gopls，并允许下载测试依赖。
 GOPLS_INTEGRATION=1 GOPLS_EXPECTED_VERSION=v0.24.0 GOPLS_BIN="$(command -v gopls)" \
