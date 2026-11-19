@@ -88,7 +88,7 @@ func parseOptions(args []string, stderr io.Writer) (options, error) {
 		flags.PrintDefaults()
 	}
 	flags.Var(&o.watchRoots, "watch-root", "additional input directory or file (repeatable; relative to cwd)")
-	flags.Var(&o.include, "include", "include root-relative glob (repeatable; supports **)")
+	flags.Var(&o.include, "include", "enable whitelist monitoring: only matching files trigger refresh (repeatable root-relative glob; supports **)")
 	flags.Var(&o.exclude, "exclude", "exclude root-relative glob (repeatable; exclusion wins)")
 	flags.StringVar(&o.cfg.RefreshMode, "refresh-mode", o.cfg.RefreshMode, "backend refresh policy: on-change or per-call (fresh backend for each tools/call)")
 	flags.StringVar(&o.cfg.BackendLifecycle, "backend-lifecycle", o.cfg.BackendLifecycle, "backend residency: resident or on-demand (requires per-call)")
